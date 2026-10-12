@@ -3111,8 +3111,12 @@ pub async fn install_extension_from_store(profile_ids: Vec<String>, ext_id: Stri
 /// machine's copy of the profile and reaches the server the next time the
 /// profile is opened and closed here.
 ///
-/// One profile at a time, and a profile that cannot be locked -- open on
-/// another machine, say -- is skipped with the server's reason.
+/// One profile at a time. A profile open here is skipped as "open" before any
+/// lock is asked for, as a local one is: its own launch holds the lock, so
+/// asking again only ever came back 409, and the window showed "Request
+/// failed (409 Conflict)" for what is "close it and add again" (tester,
+/// 12.10.2026). One open elsewhere is skipped as `in_use:<who>|<machine>`,
+/// from the server's answer, so the window can name the colleague.
 #[tauri::command]
 pub async fn install_extension_from_store_team(
     state: State<'_, AppState>,
@@ -3125,7 +3129,17 @@ pub async fn install_extension_from_store_team(
     let mut installed: Vec<serde_json::Value> = Vec::new();
     let mut skipped: Vec<serde_json::Value> = Vec::new();
     let mut extension = serde_json::Value::Null;
+    let open_here: Vec<String> = crate::agent::call::<serde_json::Value>("status", serde_json::json!({}))
+        .await
+        .ok()
+        .and_then(|s| s.get("running").cloned())
+        .and_then(|r| serde_json::from_value(r).ok())
+        .unwrap_or_default();
     for id in profile_ids {
+        if open_here.contains(&id) {
+            skipped.push(serde_json::json!({ "id": id, "reason": "open" }));
+            continue;
+        }
         let body = serde_json::json!({
             "machine_id": state.machine_id(),
             "machine_name": settings::machine_name(),
@@ -3137,7 +3151,15 @@ pub async fn install_extension_from_store_team(
         {
             Ok(g) => g,
             Err(e) => {
-                skipped.push(serde_json::json!({ "id": id, "reason": e.message }));
+                let reason = match e.body.get("holder").filter(|_| e.body.get("error").and_then(|v| v.as_str()) == Some("locked")) {
+                    Some(h) => format!(
+                        "in_use:{}|{}",
+                        h.get("user_email").and_then(|v| v.as_str()).unwrap_or_default(),
+                        h.get("machine_name").and_then(|v| v.as_str()).unwrap_or_default(),
+                    ),
+                    None => e.message,
+                };
+                skipped.push(serde_json::json!({ "id": id, "reason": reason }));
                 continue;
             }
         };

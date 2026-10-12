@@ -67,6 +67,10 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
     if (r === "proxy_missing") return t("exv.reason.proxy_missing");
     if (r.startsWith("id_mismatch:")) return t("exv.reason.id_mismatch");
     if (r.startsWith("fetch:")) return t("exv.reason.fetch", { detail: r.slice(6) });
+    if (r.startsWith("in_use:")) {
+      const [who, machine] = r.slice(7).split("|");
+      return t("exv.reason.in_use", { who: who || "?", machine: machine || "?" });
+    }
     return r;
   };
 
