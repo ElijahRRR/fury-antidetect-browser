@@ -468,7 +468,11 @@ pub fn core_outdated(exe: &std::path::Path) -> Option<String> {
 /// 0.2.24 rebuilt both on the same Chrome: WebGL's UNMASKED pair hidden until
 /// its extension is enabled (#16), Android personas (0130-0134), and the
 /// screen's pixel density no longer showing through a persona's (0020, 0131).
-pub const CORE_BUILD: &str = "0.2.24";
+///
+/// 0.3.5 rebuilt both on the same Chrome: an extension's popup is no longer
+/// taken over by the persona's scale factor (0131; Bitwarden opened as an
+/// empty square), and a phone persona's motion sensors (0135).
+pub const CORE_BUILD: &str = "0.3.5";
 
 /// `0.2.10` as (0, 2, 10); None for anything else.
 pub fn parse_release(s: &str) -> Option<(u32, u32, u32)> {
@@ -525,12 +529,12 @@ pub fn core_stale(exe: &std::path::Path) -> Option<Option<String>> {
 #[cfg(target_os = "macos")]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
     "../Frameworks/Fury Framework.framework/Versions/Current/Fury Framework",
-    "2a46be00b066c84f7361f034b5c67a2af1e7274ace0b7f97f97f3142ada3b946",
+    "fde3171d8b79268d68e4bb16f450d45d6647bfe087a8b1b47e1c5ffcc1f869c1",
 ));
 #[cfg(windows)]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
     "chrome.dll",
-    "9ddb18f1b6139a66db8ccc9b0503b616657120a945bfbd3c4ff679be266c980b",
+    "a42762f98b2b793307dd88798b9d8c4338a034c5006f56f49abfd34118b5ac85",
 ));
 #[cfg(not(any(target_os = "macos", windows)))]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = None;
