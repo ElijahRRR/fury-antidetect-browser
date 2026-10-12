@@ -29,6 +29,10 @@ tauri-plugin-single-instance = "2"
 # In-app updates, verified against the key in tauri.conf.json before anything
 # is installed. See update.rs.
 tauri-plugin-updater = "2"
+# The window comes back where and how big it was left. Without it every start
+# was 1280x800 at the default spot (tester, 12.10.2026: "does not remember the
+# window size after closing").
+tauri-plugin-window-state = "~2.4.1"
 
 # rustls for one TLS implementation across macOS and Windows — one set of
 # failures to explain instead of two.

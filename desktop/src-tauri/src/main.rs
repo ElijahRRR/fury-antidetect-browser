@@ -51,6 +51,19 @@ fn main() {
         // Updates are checked against the public key in tauri.conf.json; the
         // private half never leaves the release machine. See update.rs.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Size, position and maximised, and nothing else: restoring VISIBLE
+        // would bring the window back hidden if it was ever saved while
+        // hidden, and nothing here hides it on purpose. Saved by the plugin on
+        // close; a position on a monitor that is gone is moved back on screen.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .setup(|app| {
             update::maybe_install_on_start(app.handle());
             let config_dir = app.path().app_config_dir()?;
