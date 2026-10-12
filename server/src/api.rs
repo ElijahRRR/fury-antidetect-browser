@@ -1581,6 +1581,10 @@ pub struct ProxyRequest {
 
 /// Add a proxy the team can use.
 ///
+/// Owners, admins, and anyone with `edit_proxy` in some project
+/// (`rbac_guard::may_add_proxies`). Until 12.10.2026 it was owners and admins
+/// only, refused as "needs edit_proxy" to people who had it.
+///
 /// The server receives two opaque blobs and stores them. It cannot read either,
 /// and does not try: no field here is parsed beyond checking it is hex and
 /// plausible in length. That is the whole point — a stolen database yields a
@@ -1593,8 +1597,7 @@ async fn create_proxy(
     // handler needs both in the same expression constantly.
     let caller = db.caller;
 
-    use fury_shared::rbac::OrgRole;
-    if !matches!(caller.role, OrgRole::Owner | OrgRole::Admin) {
+    if !rbac_guard::may_add_proxies(db.as_mut(), caller.user_id, caller.org_id, caller.role).await? {
         return Err(ApiError::Denied(Perm::EditProxy));
     }
     if !matches!(req.kind.as_str(), "http" | "https" | "socks5") {
@@ -1639,7 +1642,9 @@ async fn create_proxy(
 
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO proxies (id, org_id, project_id, name, kind, host, port,                               credentials_enc, wrapped_dek, rotate_url_enc)          VALUES ($1, $2, $3, $4, $5::proxy_kind, $6, $7, $8, $9, $10)",
+        "INSERT INTO proxies (id, org_id, project_id, name, kind, host, port, \
+                              credentials_enc, wrapped_dek, rotate_url_enc, created_by) \
+         VALUES ($1, $2, $3, $4, $5::proxy_kind, $6, $7, $8, $9, $10, $11)",
     )
     .bind(id)
     .bind(caller.org_id)
@@ -1651,6 +1656,7 @@ async fn create_proxy(
     .bind(&credentials_enc)
     .bind(&wrapped_dek)
     .bind(&rotate_url_enc)
+    .bind(caller.user_id)
     .execute(db.as_mut())
     .await?;
 
@@ -2171,9 +2177,11 @@ async fn edit_proxy(
     // handler needs both in the same expression constantly.
     let caller = db.caller;
 
-    use fury_shared::rbac::OrgRole;
-    if !matches!(caller.role, OrgRole::Owner | OrgRole::Admin) {
-        return Err(ApiError::Denied(Perm::EditProxy));
+    match rbac_guard::may_change_proxy(db.as_mut(), caller.user_id, caller.org_id, caller.role, proxy_id).await? {
+        None => return Err(ApiError::NotFound),
+        Some(rbac_guard::ProxyChange::NotTheirs) => return Err(ApiError::Refused("proxy_not_yours")),
+        Some(rbac_guard::ProxyChange::NoLongerPermitted) => return Err(ApiError::Denied(Perm::EditProxy)),
+        Some(rbac_guard::ProxyChange::Allowed) => {}
     }
     if !matches!(req.kind.as_str(), "http" | "https" | "socks5") {
         return Err(ApiError::BadRequest("kind must be http, https or socks5".into()));
@@ -2306,9 +2314,11 @@ async fn delete_proxy(
     // handler needs both in the same expression constantly.
     let caller = db.caller;
 
-    use fury_shared::rbac::OrgRole;
-    if !matches!(caller.role, OrgRole::Owner | OrgRole::Admin) {
-        return Err(ApiError::Denied(Perm::EditProxy));
+    match rbac_guard::may_change_proxy(db.as_mut(), caller.user_id, caller.org_id, caller.role, proxy_id).await? {
+        None => return Err(ApiError::NotFound),
+        Some(rbac_guard::ProxyChange::NotTheirs) => return Err(ApiError::Refused("proxy_not_yours")),
+        Some(rbac_guard::ProxyChange::NoLongerPermitted) => return Err(ApiError::Denied(Perm::EditProxy)),
+        Some(rbac_guard::ProxyChange::Allowed) => {}
     }
     let used: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM profiles WHERE proxy_id = $1 AND deleted_at IS NULL",

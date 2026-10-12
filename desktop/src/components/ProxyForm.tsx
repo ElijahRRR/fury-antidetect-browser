@@ -25,7 +25,7 @@ export function ProxyForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, say } = useI18n();
   const [name, setName] = useState(editing?.name ?? "");
   const [kind, setKind] = useState(editing?.kind ?? "socks5");
   /** The type the pasted address answered on, while it is still the one set. */
@@ -217,7 +217,7 @@ export function ProxyForm({
                 });
                 onSaved();
               } catch (e) {
-                setError((e as Error).message);
+                setError(say(e));
               } finally {
                 setBusy(false);
               }

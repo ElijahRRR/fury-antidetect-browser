@@ -137,6 +137,8 @@ const en = {
   "app.updateLater": "Later",
   "err.ipNotAllowed": "Your organisation only accepts sign-ins from certain addresses, and this is not one of them. Ask an owner to add it, or connect from the office network.",
   "err.stepUpRequired": "Your organisation asks for a fresh authenticator code before this action.",
+  "err.proxyNotYours": "A colleague added this proxy, so only they, an owner or an admin can change or delete it. Other people's profiles may be going out through it.",
+  "err.denied": "Not permitted: this needs \u201c{perm}\u201d. An owner or admin can tick it under Users.",
   "err.totpEnrolmentRequired": "Your organisation asks for a second factor before this action, and you have none enrolled yet. Settings → Team server → Second factor.",
   "auth.wrongCode": "That code did not match. Codes change every 30 seconds — check the phone's clock.",
   "auth.codeWhy": "Your organisation asks for a code from your authenticator on this device.",
@@ -456,7 +458,7 @@ const en = {
   "perm.launch": "Open them",
   "perm.edit_profile": "Change name, tags, notes, start pages",
   "perm.edit_fingerprint": "Change persona and fingerprint",
-  "perm.edit_proxy": "Attach or detach a proxy",
+  "perm.edit_proxy": "Attach or detach a proxy, add new ones",
   "perm.reveal_secrets": "See passwords and proxy credentials in the clear",
   "perm.export_cookies": "Export cookies and the bundle (this also opens CDP)",
   "perm.create_profile": "Create profiles",
@@ -1170,6 +1172,8 @@ const ru: Record<Key, string> = {
   "app.updateLater": "Позже",
   "err.ipNotAllowed": "Ваша организация принимает входы только с определённых адресов, и этот — не из них. Попросите владельца добавить его или подключитесь из офисной сети.",
   "err.stepUpRequired": "Ваша организация требует свежий код из аутентификатора перед этим действием.",
+  "err.proxyNotYours": "Этот прокси добавил коллега, поэтому менять и удалять его могут только он, владелец или админ: через него могут выходить чужие профили.",
+  "err.denied": "Нет права: нужно «{perm}». Его ставит владелец или админ в разделе «Пользователи».",
   "err.totpEnrolmentRequired": "Ваша организация требует второй фактор перед этим действием, а у вас он ещё не подключён. Настройки → Командный сервер → Второй фактор.",
   "auth.wrongCode": "Код не подошёл. Коды меняются каждые 30 секунд — проверьте часы на телефоне.",
   "auth.codeWhy": "Ваша организация просит код из аутентификатора на этом устройстве.",
@@ -1475,7 +1479,7 @@ const ru: Record<Key, string> = {
   "perm.launch": "Открывать их",
   "perm.edit_profile": "Менять имя, метки, заметки, стартовые страницы",
   "perm.edit_fingerprint": "Менять персону и отпечаток",
-  "perm.edit_proxy": "Подключать и отключать прокси",
+  "perm.edit_proxy": "Подключать и отключать прокси, добавлять новые",
   "perm.reveal_secrets": "Видеть пароли и учётку прокси открытым текстом",
   "perm.export_cookies": "Выгружать cookies и бандл (это же открывает CDP)",
   "perm.create_profile": "Создавать профили",
@@ -2105,6 +2109,13 @@ export function useI18n(): {
     say: (e) => {
       const code = (e as { code?: unknown } | null)?.code;
       if (typeof code === "string" && code in dict) return t(code as Key);
+      // A missing right is named by its key; the operator knows it by the
+      // words on the checkbox their admin ticks.
+      const body = (e as { body?: { error?: unknown; missing_permission?: unknown } } | null)?.body;
+      if (body?.error === "denied" && typeof body.missing_permission === "string") {
+        const label = `perm.${body.missing_permission}`;
+        if (label in dict) return t("err.denied", { perm: t(label as Key) });
+      }
       return (e as Error)?.message ?? String(e);
     },
     language,

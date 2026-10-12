@@ -118,6 +118,89 @@ pub async fn require(
     Ok(perms)
 }
 
+/// Whether `caller` may add proxies to the organisation's list.
+///
+/// The list is one per organisation, so there is no project to ask. Owners and
+/// admins may; anybody else may when some project gives them `edit_proxy`,
+/// because a person trusted to put a proxy on a profile, and sent off to set up
+/// profiles, has to be able to bring the proxy too. Asking an admin to type in
+/// every exit was the alternative, and it is the one a tester ran into.
+///
+/// Changing or retiring a proxy is narrower, see `may_change_proxy`.
+pub async fn may_add_proxies(
+    db: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    org_id: Uuid,
+    role: OrgRole,
+) -> Result<bool, GuardError> {
+    if fury_shared::rbac::has_implicit_project_access(role) {
+        return Ok(true);
+    }
+    let grants: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT g.permissions
+        FROM project_grants g
+        JOIN projects p ON p.id = g.project_id
+        WHERE g.user_id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL
+          AND (g.expires_at IS NULL OR g.expires_at > now())
+        "#,
+    )
+    .bind(user_id)
+    .bind(org_id)
+    .fetch_all(&mut *db)
+    .await?;
+    Ok(grants
+        .into_iter()
+        .any(|bits| effective(role, Some(PermSet(bits))).has(Perm::EditProxy)))
+}
+
+/// What `may_change_proxy` found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProxyChange {
+    Allowed,
+    /// Somebody else added it.
+    NotTheirs,
+    /// Theirs, but no project gives them `edit_proxy` any more.
+    NoLongerPermitted,
+}
+
+/// Whether `caller` may change or retire this proxy.
+///
+/// Owners and admins, any proxy. Everybody else, only one they added and only
+/// while they may still add proxies: a colleague's proxy may be what other
+/// people's profiles go out through, and losing `edit_proxy` everywhere should
+/// take the proxies one added out of one's hands too.
+///
+/// `None` when there is no such proxy in the organisation, so the handler
+/// answers 404 for it rather than a refusal that admits it exists.
+pub async fn may_change_proxy(
+    db: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    org_id: Uuid,
+    role: OrgRole,
+    proxy_id: Uuid,
+) -> Result<Option<ProxyChange>, GuardError> {
+    let created_by: Option<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT created_by FROM proxies WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(proxy_id)
+    .bind(org_id)
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some(created_by) = created_by else {
+        return Ok(None);
+    };
+    Ok(Some(if fury_shared::rbac::has_implicit_project_access(role) {
+        ProxyChange::Allowed
+    } else if created_by != Some(user_id) {
+        ProxyChange::NotTheirs
+    } else if may_add_proxies(db, user_id, org_id, role).await? {
+        ProxyChange::Allowed
+    } else {
+        ProxyChange::NoLongerPermitted
+    }))
+}
+
 fn parse_role(s: &str) -> Option<OrgRole> {
     Some(match s {
         "owner" => OrgRole::Owner,

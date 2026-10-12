@@ -250,6 +250,7 @@ impl AppState {
                     Some("ip_not_allowed") => Some("err.ipNotAllowed"),
                     Some("step_up_required") => Some("err.stepUpRequired"),
                     Some("totp_enrolment_required") => Some("err.totpEnrolmentRequired"),
+                    Some("proxy_not_yours") => Some("err.proxyNotYours"),
                     _ => None,
                 }
             } else {

@@ -777,3 +777,67 @@ db_test!(the_listing_carries_the_current_bundle_size, c, {
     assert_eq!(size("shared"), Some(5662310));
     assert_eq!(size("private"), None, "never uploaded, so nothing to weigh");
 });
+
+// ---------------------------------------------------------------------------
+// 0015: edit_proxy on a project lets a person bring their own proxies
+// ---------------------------------------------------------------------------
+
+db_test!(edit_proxy_on_a_project_adds_proxies_and_changes_only_ones_own, c, {
+    use crate::rbac_guard::{may_add_proxies, may_change_proxy, ProxyChange};
+    use fury_shared::rbac::OrgRole;
+    bind(&mut c, USER_A).await;
+    make_project(&mut c, PROJECT_A, ORG_A, USER_A).await;
+    let org = uuid::Uuid::parse_str(ORG_A).unwrap();
+    // Two members of A: one let into the project with view + edit_proxy, the
+    // other with view only. A tester's member had every box but one ticked and
+    // still met "needs edit_proxy" (12.10.2026).
+    let with = "cccccccc-0000-0000-0000-00000000000c";
+    let without = "cccccccc-0000-0000-0000-00000000000d";
+    let sql = format!(
+        "INSERT INTO users (id, email, password_hash, public_key, wrapped_private_key, kdf_salt)
+           VALUES ('{with}','m1@example.com','x','\\x00','\\x00','\\x00'),
+                  ('{without}','m2@example.com','x','\\x00','\\x00','\\x00');
+         INSERT INTO org_members (org_id, user_id, role, wrapped_ork, ork_generation)
+           VALUES ('{ORG_A}','{with}','member','\\x00',1),
+                  ('{ORG_A}','{without}','member','\\x00',1);
+         INSERT INTO project_grants (project_id, user_id, permissions, granted_by)
+           VALUES ('{PROJECT_A}','{with}',17,'{USER_A}'),
+                  ('{PROJECT_A}','{without}',1,'{USER_A}');
+         INSERT INTO proxies (id, org_id, name, kind, host, port, created_by)
+           VALUES ('00000000-0000-0000-0000-0000000000e1','{ORG_A}','owners','http','h1',1,'{USER_A}'),
+                  ('00000000-0000-0000-0000-0000000000e2','{ORG_A}','members','http','h2',2,'{with}'),
+                  ('00000000-0000-0000-0000-0000000000e3','{ORG_A}','old','http','h3',3,NULL);"
+    );
+    c.execute(sql.as_str()).await.expect("seed two members and three proxies");
+    let with = uuid::Uuid::parse_str(with).unwrap();
+    let without = uuid::Uuid::parse_str(without).unwrap();
+    let owner = uuid::Uuid::parse_str(USER_A).unwrap();
+    let owners = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000e1").unwrap();
+    let members = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000e2").unwrap();
+    let old = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000e3").unwrap();
+
+    assert!(may_add_proxies(&mut c, owner, org, OrgRole::Owner).await.unwrap());
+    assert!(may_add_proxies(&mut c, with, org, OrgRole::Member).await.unwrap());
+    assert!(!may_add_proxies(&mut c, without, org, OrgRole::Member).await.unwrap());
+
+    macro_rules! change {
+        ($who:expr, $role:expr, $proxy:expr) => {
+            may_change_proxy(&mut c, $who, org, $role, $proxy).await.unwrap()
+        };
+    }
+    assert_eq!(change!(with, OrgRole::Member, members), Some(ProxyChange::Allowed));
+    assert_eq!(change!(with, OrgRole::Member, owners), Some(ProxyChange::NotTheirs));
+    assert_eq!(change!(with, OrgRole::Member, old), Some(ProxyChange::NotTheirs));
+    assert_eq!(change!(owner, OrgRole::Owner, members), Some(ProxyChange::Allowed));
+    assert_eq!(change!(owner, OrgRole::Owner, old), Some(ProxyChange::Allowed));
+
+    // An expired grant is no grant: the proxy stays theirs and leaves their hands.
+    sqlx::query("UPDATE project_grants SET expires_at = now() - interval '1 minute' WHERE user_id = $1")
+        .bind(with).execute(&mut c).await.unwrap();
+    assert!(!may_add_proxies(&mut c, with, org, OrgRole::Member).await.unwrap());
+    assert_eq!(change!(with, OrgRole::Member, members), Some(ProxyChange::NoLongerPermitted));
+
+    // Asked about another organisation, the proxy does not exist.
+    let org_b = uuid::Uuid::parse_str(ORG_B).unwrap();
+    assert_eq!(may_change_proxy(&mut c, owner, org_b, OrgRole::Owner, members).await.unwrap(), None);
+});

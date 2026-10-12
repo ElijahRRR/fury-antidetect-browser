@@ -26,7 +26,7 @@ export function ProxyPaste({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, say } = useI18n();
   const dict = dictionary();
   const [text, setText] = useState("");
   const [prefix, setPrefix] = useState("");
@@ -159,7 +159,7 @@ export function ProxyPaste({
                   try {
                     setResult(await api.importProxies(text, prefix.trim()));
                   } catch (e) {
-                    setError((e as Error).message);
+                    setError(say(e));
                   } finally {
                     setBusy(false);
                   }

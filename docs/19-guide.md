@@ -106,6 +106,11 @@ languages from that country.
 A profile opens without a proxy only if **Let this profile open without a proxy**
 is ticked in it. Sites then see your real address; do that knowingly.
 
+In a team, proxies can be added by the owner, admins, and anyone who has
+**Attach or detach a proxy, add new ones** in at least one project. Such a
+person can change and delete the proxies they added, not a colleague's: other
+people's profiles may be going out through those.
+
 ## 4. Team
 
 The owner or an admin runs the team from **Users**.
