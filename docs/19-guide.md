@@ -1,0 +1,226 @@
+# Using Fury
+
+For the people who work in the application: making profiles, giving access to
+colleagues, updating. Installing it is in [15](15-install.md); running your own
+team server is in [14](14-team-server.md) (Russian). Everything else is here.
+
+Русский: [19-guide.ru.md](19-guide.ru.md).
+
+## 1. First start
+
+After installing, Fury offers **Download the browser**. That is the browser
+your profiles open in, 100 to 150 MB, once. Profiles do not open without it.
+
+Then the sign-in screen, where you choose how you work:
+
+| Button | What it is | For |
+|---|---|---|
+| **Work without an account** | Everything stays on this computer. No sign-up, no server, nothing leaves. | One person |
+| **Create an account** | A team on our server; `srv.furybrowser.dev` is filled in. Email, password and a team name; you become its owner. | A team that does not want to run a server |
+| **I have an invitation** | A colleague invited you and sent a code. | A team member |
+| **Sign in** | You already have an account. | |
+
+All of it is free, alone or as a team.
+
+**A team account's password cannot be recovered.** It encrypts the team's data
+on your machine and nobody holds a copy, the server included. Put it in a
+password manager right away.
+
+You can move from working alone to a team later: **Settings → Team server**.
+Profiles made on this computer stay.
+
+## 2. Profiles
+
+### One profile
+
+**New profile** on the left. Its tabs:
+
+- **General**: name, tags, stage (for example "warming", "ready"), notes and
+  the pages it opens with.
+- **Proxy**: pick one or add a new one right there.
+- **Device**: which device the profile presents. Fury picks it from a
+  catalogue of real machines; no need to change it.
+- **Machine settings**: languages, timezone, geolocation, screen, CPU, memory,
+  GPU. Languages, timezone and geolocation follow the country the proxy exits
+  in, the rest the chosen machine. Usually nothing to touch.
+- **Logins**: the accounts' logins, passwords and second-factor codes for this
+  profile, instead of a separate spreadsheet.
+- **Advanced**: canvas noise and other fine fingerprint settings, and a summary
+  of what a site sees.
+
+**Where** decides where the profile lives:
+
+- **On this computer**: only you have it. A proxy can be added later.
+- **In the team**: kept on the server and can be given to colleagues. It needs
+  a proxy from the start.
+
+With a project open, the profile goes into it and Where is not asked.
+
+### Many at once
+
+**Several profiles…** above the list: how many and how to name them, and
+optionally a list of proxies to share out. Each profile gets its own device and
+fingerprint.
+
+### From another anti-detect browser
+
+Two buttons above the list:
+
+- **From another anti-detect…**: GoLogin, Dolphin, AdsPower, Undetectable,
+  Kameleo and Vision. The dialog says what each needs: an API token from its
+  settings, or the app running. Names, notes, tags, start pages, your own
+  proxies with login and password, and cookies come over. The fingerprint does
+  not: each profile gets a device from Fury's catalogue with the same OS.
+- **Import CSV…**: a table of names, proxies, tags and so on.
+
+Imports file profiles on this computer, so the buttons show with a project on
+this computer open or with none. Import first, then give profiles to the team.
+
+### The list
+
+- **Open** / **Close** on a profile's row; it opens in its own browser window.
+- **Edit**: its settings. Close an open profile first.
+- **Delete** moves it to the **Trash**, not for good; it can come back.
+- Tick several and the bar above acts on all of them: **Open**, **Close**,
+  **Proxy →** (one each or one for all), **Warm up…** (visit a list of sites
+  so cookies build up), **Move to project…**, **Delete**.
+- Search matches name, tag and proxy; tag and stage filters sit beside it.
+- A profile's **cookies** can be exported and imported as JSON.
+
+## 3. Proxies
+
+**Proxies** on the left, **Add proxy**. Paste a list, one per line, in any of
+the usual shapes:
+
+```
+host:port
+host:port:user:pass
+user:pass@host:port
+socks5://user:pass@host:port
+```
+
+**Where does this come out?** checks one, **Check all** the whole list: whether it
+answers, and the country and city it exits in. A profile takes its timezone and
+languages from that country.
+
+A profile opens without a proxy only if **Let this profile open without a proxy**
+is ticked in it. Sites then see your real address; do that knowingly.
+
+## 4. Team
+
+The owner or an admin runs the team from **Users**.
+
+### Inviting someone
+
+1. **Users → Invite someone**: email and role, then **Create invitation**.
+2. A code appears. It is shown once, lasts 48 hours and works for one sign-up.
+   Pass it on any way you like.
+3. They install Fury and press **I have an invitation** on the first screen
+   (or, if Fury is already running, **Settings → Team server → I have an
+   invitation**), enter the code and choose their own password. You never see it.
+4. In **Users** they are marked **waiting to be let in**. Press **Let them in** and
+   tick the projects they need.
+
+Step 4 is the easy one to miss. Until then they can sign in and see the team,
+and open nothing.
+
+### Roles
+
+| Role | Can |
+|---|---|
+| Owner | everything; one per team |
+| Admin | invite, let in, create projects, give access; sees every project |
+| Manager | work in the projects given, and give access inside them |
+| Member | work only in what was given |
+
+### Project access
+
+A project is a folder of profiles and the unit of access: whoever has the
+project has every profile in it. In **Users** pick the project, **Add from the
+team**, tick the rights and **Grant access**. **Revoke** ends it at once.
+
+### Giving one profile
+
+**Access** on a profile's row (or tick several and **Give access…**). Your team
+is listed under the address field; pick someone and tick:
+
+- **Open it**
+- **Change its settings**
+- **See passwords and proxy credentials in the clear**. Without it the proxy still works for
+  them; the password is just not shown.
+
+A profile that lived only on your computer goes to the server on the way.
+**Take back** in the same dialog revokes it. What others gave you is under
+**Shared with me**.
+
+Revoking closes access from then on. Cookies the person already opened on their
+machine stay there; give live accounts only to people you would trust with the
+accounts themselves.
+
+### One profile, one person at a time
+
+A profile open on a colleague's machine shows who has it and where. Ask them to
+close it; with the right permission there is also **Take over**, for when
+somebody left it open and went home.
+
+### Someone leaves
+
+**Users → Remove**. Their access ends at once and the team key is replaced, so
+nothing new opens with their old copy. If a laptop with access is lost, use
+**Replace the organisation key**.
+
+### Sign-in security
+
+The owner can require a second factor (an authenticator app code), allow
+sign-in only from given addresses, and see the sign-in log and live sessions.
+Details in [14, section 5a](14-team-server.md).
+
+### Your own server
+
+To keep the team's data off our server, run your own: one server and a
+PostgreSQL database, step by step in [14](14-team-server.md). Profile data is
+encrypted on your machines; the server, ours or yours, cannot read it.
+
+## 5. Updating
+
+When a new version is out, a bar at the top says so with an **Update** button:
+Fury downloads it, checks its signature, installs it and restarts. Profiles,
+proxies and settings stay. Close open profiles first; the button reminds you.
+
+The button arrived in 0.3.0. From an older version, install the new one by hand
+once from the [releases page](https://github.com/furyteamtop/fury-antidetect-browser/releases/latest).
+
+Sometimes the browser itself updates; Fury then shows **Update the browser**, a
+separate download that leaves profiles alone.
+
+## 6. AI assistants
+
+**AI assistants**: Claude, Cursor and other assistants with MCP support can work
+with your profiles, for example "open every profile tagged warm and check the
+login held". **Connect** adds Fury to the assistant's settings. The assistant
+and its account are yours; Fury sends nothing anywhere.
+
+## 7. Common questions
+
+**A new profile will not save.** It is probably being made "In the team", which
+needs a proxy. Pick one, or choose "On this computer".
+
+**No import from GoLogin and others.** Open a project on this computer, or
+none; team projects have no import. Before 0.3.1 the buttons were hidden on any
+app connected to a server: update.
+
+**Fury stays in the Dock "running in background" after quitting.** That was the
+background service kept up for open profiles. From 0.3.3 Fury quits fully when
+no profile is open; with profiles open, the service stays until the last one
+closes.
+
+**Forgot the team account password.** It cannot be recovered. The owner or an
+admin removes the account and invites it again.
+
+**Windows says "Windows protected your PC".** The installer is not yet signed
+with a Microsoft certificate. **More info → Run anyway**.
+
+**Found a bug or have an idea.** Open an
+[issue on GitHub](https://github.com/furyteamtop/fury-antidetect-browser/issues/new):
+one problem per issue, with a screenshot and the Fury version
+(**Settings → About**).

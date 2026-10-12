@@ -156,6 +156,10 @@ If you only want to use it, you do not need any of what follows:
 [docs/15](docs/15-install.md) is two downloads and one command, and it is the
 page to send anybody who asks how to try this.
 
+How to use the application once it is installed (profiles, proxies, importing
+from other anti-detect browsers, a team, invitations and project access,
+updating): [docs/19](docs/19-guide.md).
+
 ## Build
 
 The core took **2 h 42 min** on an Apple M5 with 10 cores and 16 GB, in the
