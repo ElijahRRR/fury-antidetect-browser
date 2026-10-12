@@ -139,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
                        --core PATH         core binary (or set FURY_CORE)\n        \
                        --url URL           page to open\n        \
                        --debug-port N      expose CDP on 127.0.0.1:N\n        \
+                       --extension DIR     load an unpacked extension (repeatable)\n        \
                        --real-canvas       the machine's own canvas instead of noise\n  \
                    fury-agent check-fingerprint <config.json>\n      \
                      Validate a fingerprint config for internal consistency.\n      \
@@ -349,14 +350,22 @@ async fn cmd_launch(args: &[String]) -> anyhow::Result<()> {
         None => relay.iter().map(|(_, _, start)| start.clone()).collect(),
     };
 
+    let extensions: Vec<std::path::PathBuf> = args
+        .windows(2)
+        .filter(|w| w[0] == "--extension")
+        .map(|w| std::path::PathBuf::from(&w[1]))
+        .collect();
+
     let spec = launcher::LaunchSpec {
         core_binary: &core,
         user_data_dir: &profile_dir,
         config: &config,
         relay_port,
         // The CLI launch takes a persona file rather than a stored profile, so
-        // there is no profile whose extensions these would be.
-        extensions: &[],
+        // there is no profile whose extensions these would be: --extension
+        // names unpacked directories by hand, for seeing one run under a
+        // persona without an agent, a profile or the Web Store.
+        extensions: &extensions,
         // A CLI launch is the operator working on their own machine, so nothing
         // is withheld. The server decides this when a profile comes from a team.
         restrictions: fury_shared::rbac::LaunchRestrictions::for_perms(

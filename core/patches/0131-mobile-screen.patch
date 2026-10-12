@@ -239,7 +239,7 @@ index 034fb7e51d..6ca250c0ad 100644
  
  void ScreenMetricsEmulator::UpdateVisualProperties(
 diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
-index f3cea4974f..4a0e52b3e2 100644
+index f3cea4974f..1f53f6d6d5 100644
 --- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 +++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 @@ -30,6 +30,8 @@
@@ -340,7 +340,29 @@ index f3cea4974f..4a0e52b3e2 100644
  Element* GetElementFromDOMNodeId(DOMNodeIdType target_dom_node_id) {
    if (target_dom_node_id.is_null()) {
      return nullptr;
-@@ -2104,6 +2188,12 @@ void WebFrameWidgetImpl::UpdateVisualProperties(
+@@ -1984,6 +2068,21 @@ void WebFrameWidgetImpl::UpdateVisualProperties(
+   SetApplicationContext(visual_properties.application_context);
+ 
+   if (ForMainFrame()) {
++    // Patch 0131: an extension's popup is a widget that sizes itself to its
++    // content, and it is told so only in a later visual properties update.
++    // Its first one has no auto-resize yet, so the persona's scale factor
++    // (or phone) was switched on below, and from then on the emulator owned
++    // the size and the content never reached the window: Bitwarden opened as
++    // an empty 39x39 square whenever the persona's ratio differed from the
++    // screen's (tester, 12.10.2026; reproduced at 1x and 1.25x on a 2x Mac).
++    // Upstream never has both at once -- SetScreenInfoAndSize DCHECKs it -- so
++    // the emulation goes before auto-resize starts, while undoing it is still
++    // a plain resize.
++    if (visual_properties.auto_resize_enabled && !AutoResizeMode() &&
++        device_emulator_ && widget_base_ && !widget_base_->WillBeDestroyed()) {
++      device_emulator_->DisableAndApply();
++      device_emulator_ = nullptr;
++    }
+     SetAutoResizeMode(
+         visual_properties.auto_resize_enabled,
+         visual_properties.min_size_for_auto_resize,
+@@ -2104,6 +2203,12 @@ void WebFrameWidgetImpl::UpdateVisualProperties(
        unbounded_surface_state_->host_->UpdateBounds(bounds);
      }
    }
@@ -353,7 +375,7 @@ index f3cea4974f..4a0e52b3e2 100644
  }
  
  void WebFrameWidgetImpl::ApplyVisualPropertiesSizing(
-@@ -2493,6 +2583,38 @@ void WebFrameWidgetImpl::DisableDeviceEmulation() {
+@@ -2493,6 +2598,38 @@ void WebFrameWidgetImpl::DisableDeviceEmulation() {
      device_emulator_->DisableAndApply();
    }
    device_emulator_ = nullptr;
@@ -392,7 +414,7 @@ index f3cea4974f..4a0e52b3e2 100644
  }
  
  void WebFrameWidgetImpl::SetIsInertForSubFrame(bool inert) {
-@@ -3754,6 +3876,44 @@ const display::ScreenInfos& WebFrameWidgetImpl::GetOriginalScreenInfos() {
+@@ -3754,6 +3891,44 @@ const display::ScreenInfos& WebFrameWidgetImpl::GetOriginalScreenInfos() {
    return widget_base_->screen_infos();
  }
  
@@ -437,7 +459,7 @@ index f3cea4974f..4a0e52b3e2 100644
  gfx::Rect WebFrameWidgetImpl::WindowRect() {
    return widget_base_->WindowRect();
  }
-@@ -4556,6 +4716,8 @@ void WebFrameWidgetImpl::DidNavigate() {
+@@ -4556,6 +4731,8 @@ void WebFrameWidgetImpl::DidNavigate() {
    if (RuntimeEnabledFeatures::UnboundedElementEnabled()) {
      OnDismissed();
    }
@@ -446,7 +468,7 @@ index f3cea4974f..4a0e52b3e2 100644
  }
  
  void WebFrameWidgetImpl::FlushInputForTesting(base::OnceClosure done_callback) {
-@@ -5320,13 +5482,15 @@ void WebFrameWidgetImpl::SetScreenMetricsEmulationParameters(
+@@ -5320,13 +5497,15 @@ void WebFrameWidgetImpl::SetScreenMetricsEmulationParameters(
  void WebFrameWidgetImpl::SetScreenInfoAndSize(
      const display::ScreenInfos& screen_infos,
      const gfx::Size& widget_size_in_dips,
@@ -464,7 +486,7 @@ index f3cea4974f..4a0e52b3e2 100644
  }
  
  float WebFrameWidgetImpl::GetCompositingScaleFactor() {
-@@ -5569,12 +5733,18 @@ void WebFrameWidgetImpl::DidUpdateSurfaceAndScreen(
+@@ -5569,12 +5748,18 @@ void WebFrameWidgetImpl::DidUpdateSurfaceAndScreen(
          }
        });
  
