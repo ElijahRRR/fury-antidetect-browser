@@ -2803,6 +2803,7 @@ impl Agent {
                 .collect();
 
         let child = launcher::spawn(&launcher::LaunchSpec {
+            dock_name: Some((&profile.id, &profile.name)),
             core_binary: &core,
             user_data_dir: &dir,
             config: &config,

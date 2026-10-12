@@ -86,6 +86,11 @@ pub struct LaunchSpec<'a> {
     /// else and quietly falls back to en-US, which would leave a profile
     /// announcing German and formatting numbers in English.
     pub ui_locale: &'a str,
+
+    /// (profile id, profile name): on macOS the core runs from a copy named
+    /// after the profile, so the Dock says which account it is (dock.rs).
+    /// None runs the core as it is, and the Dock says Fury.
+    pub dock_name: Option<(&'a str, &'a str)>,
 }
 
 /// Build the argument vector for the core.
@@ -286,7 +291,22 @@ pub fn spawn(spec: &LaunchSpec) -> Result<std::process::Child, LaunchError> {
         ),
     }
 
-    let mut cmd = std::process::Command::new(spec.core_binary);
+    // After the CDM: both are best effort, and neither may stop a launch.
+    #[cfg(target_os = "macos")]
+    let named = spec.dock_name.and_then(|(id, name)| {
+        match crate::dock::named_core(spec.core_binary, id, name) {
+            Ok(exe) => Some(exe),
+            Err(e) => {
+                tracing::warn!(error = %e, "running the core under its own name; the Dock will say Fury");
+                None
+            }
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
+    let named: Option<PathBuf> = None;
+    let core_binary = named.as_deref().unwrap_or(spec.core_binary);
+
+    let mut cmd = std::process::Command::new(core_binary);
     cmd.args(build_args(spec)).stdin(Stdio::null());
 
     // The config arrives as an inherited open file — fd 3 on macOS, a HANDLE on
@@ -357,6 +377,7 @@ mod tests {
 
     fn spec_for(restrictions: LaunchRestrictions, cfg: &serde_json::Value) -> LaunchSpec<'_> {
         LaunchSpec {
+            dock_name: None,
             extensions: &[],
             core_binary: Path::new("/nonexistent/Fury"),
             user_data_dir: Path::new("/tmp/p"),

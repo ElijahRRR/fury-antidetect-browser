@@ -69,6 +69,18 @@ pub fn legacy_core_dir() -> PathBuf {
     data_dir().join("core")
 }
 
+/// Where each profile's copy of the core, named after the profile, is made
+/// for the macOS Dock (dock.rs).
+///
+/// `.noindex`, not `.bundle`: measured 12.10.2026, Spotlight lists
+/// core.bundle/Fury.app as an application despite what core_dir says, and
+/// lists nothing under a `.noindex` directory (core/src/out/*.noindex holds
+/// several Fury.app and none appears). A clone per profile in search would be
+/// a list of fake applications named after accounts.
+pub fn dock_dir() -> PathBuf {
+    data_dir().join("dock.noindex")
+}
+
 /// Where a profile's browser data lives between runs.
 pub fn profile_dir(profile_id: &str) -> PathBuf {
     data_dir().join("profiles").join(profile_id)

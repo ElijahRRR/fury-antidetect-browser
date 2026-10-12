@@ -16,6 +16,7 @@ mod bundle;
 mod capture;
 mod cookies;
 mod diagnose;
+mod dock;
 mod core_download;
 mod logging;
 mod ext;
@@ -357,6 +358,8 @@ async fn cmd_launch(args: &[String]) -> anyhow::Result<()> {
         .collect();
 
     let spec = launcher::LaunchSpec {
+        // The CLI runs a persona, not a profile: nothing to name.
+        dock_name: None,
         core_binary: &core,
         user_data_dir: &profile_dir,
         config: &config,

@@ -62,6 +62,28 @@ pub fn copy_tree(src: &Path, into: &Path) -> io::Result<()> {
     }
 }
 
+/// A copy-on-write clone of a whole tree, `src` to `dst`, which must not exist.
+///
+/// clonefile(2): one call, the directory and everything in it, symlinks kept
+/// as symlinks and modes as they were, and no data written -- the clone shares
+/// the original's blocks until one side changes. Measured on the 326 MB core:
+/// 0.12 s. Fails rather than copying when the volume is not APFS, because a
+/// caller that wanted a cheap clone does not want 326 MB written instead.
+#[cfg(target_os = "macos")]
+pub fn clone_tree(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let src = std::ffi::CString::new(src.as_os_str().as_bytes())?;
+    let dst = std::ffi::CString::new(dst.as_os_str().as_bytes())?;
+    // CLONE_NOFOLLOW (sys/clonefile.h; not in the libc crate): a src that is
+    // itself a link is cloned as the link.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+    if unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// A plain recursive copy, `src` to `dst`, creating `dst`.
 ///
 /// Not cfg'd out anywhere. It is what Windows uses and what the tests on every
@@ -105,6 +127,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_clone_keeps_links_and_modes_and_refuses_an_existing_target() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("clone");
+        let src = root.join("Fury.app/Contents");
+        std::fs::create_dir_all(src.join("MacOS")).unwrap();
+        std::fs::write(src.join("MacOS/Fury"), b"#!").unwrap();
+        std::fs::set_permissions(src.join("MacOS/Fury"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("MacOS", src.join("Current")).unwrap();
+
+        let dst = root.join("Named.app");
+        clone_tree(&root.join("Fury.app"), &dst).unwrap();
+        let exe = dst.join("Contents/MacOS/Fury");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"#!");
+        assert_eq!(std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777, 0o755);
+        assert!(std::fs::symlink_metadata(dst.join("Contents/Current")).unwrap().file_type().is_symlink());
+        assert!(clone_tree(&root.join("Fury.app"), &dst).is_err(), "an existing target is refused");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

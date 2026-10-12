@@ -418,6 +418,12 @@ async function main() {
   console.log("== 1. A opens it for the first time, does some work, closes it with the agent");
   let a = await launch(t, "A");
   step({ step: "A launch", took: secs(a.took), pull: a.pulled.replace(/.*INFO /, "") });
+  if (process.platform === "darwin") {
+    // dock.rs: the core runs from a copy named after the profile.
+    const { execFileSync } = await import("node:child_process");
+    const dock = execFileSync("osascript", ["-e", 'tell application "System Events" to get name of every UI element of list 1 of process "Dock"']).toString();
+    claim(dock.split(",").map((x) => x.trim()).includes("e2e team profile"), "the Dock names the profile, not Fury");
+  }
   await work(a.cdp, "one");
   await setPref(a.cdp, "bookmark_bar.show_on_all_tabs", true);
   // A person does not close the window the instant they star a page.
