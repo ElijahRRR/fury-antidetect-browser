@@ -112,6 +112,26 @@ struct Running {
     relay: tokio::task::JoinHandle<()>,
 }
 
+/// The backstop for an entry that leaves the map by any road but `stop`.
+///
+/// `stop` is the only teardown -- push, unlock, relay, heartbeat -- and it
+/// aborts both tasks itself. But `profiles.list` used to drop dead entries out
+/// of the map on its own, and a dropped JoinHandle detaches its task: a team
+/// profile closed from its own window just before the shell refreshed its list
+/// kept renewing its lock for as long as the agent lived, its session was never
+/// pushed, and the row said "in use here" with a Close that did nothing and an
+/// Open the server refused (tester, 12.10.2026). The reads no longer remove
+/// anything; this makes the next mistake cost ninety seconds of lock rather
+/// than the afternoon.
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(beat) = self.heartbeat.take() {
+            beat.abort();
+        }
+        self.relay.abort();
+    }
+}
+
 pub struct Agent {
     store: Store,
     running: Mutex<HashMap<String, Running>>,
@@ -1302,9 +1322,19 @@ impl Agent {
                 // this list the instant a window closes, and answering "open"
                 // for two seconds is the difference between the interface
                 // feeling alive and feeling stuck.
-                let mut running = self.running.lock().await;
-                running.retain(|_, entry| !matches!(entry.child.try_wait(), Ok(Some(_))));
-                let running = running;
+                //
+                // Asked, never removed. Removing a dead entry here took it away
+                // from the reaper, whose `stop` is what pushes a team profile's
+                // session and releases its lock; see `impl Drop for Running`.
+                let running: std::collections::HashSet<String> = self
+                    .running
+                    .lock()
+                    .await
+                    .iter_mut()
+                    .filter_map(|(id, entry)| {
+                        matches!(entry.child.try_wait(), Ok(None)).then(|| id.clone())
+                    })
+                    .collect();
                 // The list is the only place the shell learns what is open, so
                 // the answer has to come from the supervisor rather than from a
                 // flag in the database that a crash would leave stale.
@@ -1312,7 +1342,7 @@ impl Agent {
                     .drain(..)
                     .map(|p| {
                         let mut v = serde_json::to_value(&p).unwrap_or_default();
-                        v["running"] = json!(running.contains_key(&p.id));
+                        v["running"] = json!(running.contains(&p.id));
                         v
                     })
                     .collect();
@@ -2140,8 +2170,12 @@ impl Agent {
                 let id = str_param(&params, "id")?;
                 let ws = {
                     let mut running = self.running.lock().await;
-                    running.retain(|_, entry| !matches!(entry.child.try_wait(), Ok(Some(_))));
-                    match running.get(&id) {
+                    // A browser that has gone is not open, and its entry stays
+                    // for the reaper to tear down (see profiles.list).
+                    let alive = running
+                        .get_mut(&id)
+                        .is_some_and(|entry| matches!(entry.child.try_wait(), Ok(None)));
+                    match running.get(&id).filter(|_| alive) {
                         None => {
                             return Err(Coded {
                                 code: "err.pageNotOpen",
@@ -2320,20 +2354,28 @@ impl Agent {
             )),
             _ => None,
         });
-        {
+        let closed_unseen = {
             let mut running = self.running.lock().await;
-            if let Some(existing) = running.get_mut(profile_id) {
+            match running.get_mut(profile_id) {
                 // try_wait rather than a stored flag: the browser may have been
                 // closed from its own window, and reporting it as open would
                 // leave the operator with a profile they cannot start.
-                if existing.child.try_wait()?.is_none() {
-                    anyhow::bail!("this profile is already open");
+                Some(existing) => {
+                    if existing.child.try_wait()?.is_none() {
+                        anyhow::bail!("this profile is already open");
+                    }
+                    true
                 }
-                // Closed from its own window rather than through us. The relay
-                // is still up and has to go with it.
-                if let Some(dead) = running.remove(profile_id) {
-                    dead.relay.abort();
-                }
+                None => false,
+            }
+        };
+        // Closed from its own window and not yet reaped. The whole teardown,
+        // not just the relay: this used to abort the relay and drop the entry,
+        // so a team profile reopened within two seconds of closing never
+        // pushed the session it had just finished.
+        if closed_unseen {
+            if let Err(e) = self.stop(profile_id).await {
+                tracing::warn!(profile = %profile_id, error = format!("{e:#}"), "could not tidy up after it");
             }
         }
 

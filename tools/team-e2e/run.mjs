@@ -468,6 +468,40 @@ async function main() {
   c = await close(t, b, "agent");
   step({ step: "B close (agent)", took: secs(c.took), uploaded: c.uploaded, stored: mb(storedBytes(t)) });
 
+  console.log("\n== 6. A closes the window while the shell is listing profiles");
+  // The shell asks profiles.list on every refresh, and in team mode too (it
+  // shows this machine's profiles beside the server's). That call used to
+  // drop a closed browser's entry before the reaper reached it: no push, no
+  // unlock, and a heartbeat that kept the lock alive with nothing open
+  // (tester, 12.10.2026: "in use here", Close did nothing, Open refused).
+  a = await launch(t, "A");
+  await work(a.cdp, "six");
+  await sleep(1000);
+  {
+    const v0 = await serverVersion(t);
+    const started = now();
+    a.cdp.fire("Browser.close");
+    // Listing as fast as a busy window would, through the reaper's two seconds.
+    const until = now() + 3000;
+    while (now() < until) {
+      await ipc("A", "profiles.list").catch(() => {});
+      await sleep(50);
+    }
+    let v1 = v0;
+    for (let i = 0; i < 120 && v1 === v0; i++) {
+      await sleep(500);
+      v1 = await serverVersion(t);
+    }
+    a.cdp.close();
+    step({ step: "A close (window, listed)", took: secs(now() - started), uploaded: v1 !== v0 });
+    claim(v1 !== v0, "A's session reached the server although the list was asked while it closed");
+    const free = await lock(t, "B").then(
+      async (g) => { await api("POST", `/v1/profiles/${t.profileId}/unlock`, t.tokens.B, { lock_token: g.lock_token }); return true; },
+      () => false,
+    );
+    claim(free, "and its lock was released: B can take it straight away");
+  }
+
   console.log(`\n${failed === 0 ? "PASS" : "FAIL"} -- ${passed} ok, ${failed} false`);
   process.exitCode = failed === 0 ? 0 : 1;
 }
