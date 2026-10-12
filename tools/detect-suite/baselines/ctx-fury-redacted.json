@@ -1,6 +1,6 @@
 {
-  "__collectedInMs": 451,
-  "__probeVersion": "0.2.0",
+  "__collectedInMs": 4522,
+  "__probeVersion": "0.3.0",
   "__redacted": true,
   "__schema": 1,
   "audio": {
@@ -377,9 +377,9 @@
         "dischargingTime": "Infinity",
         "level": 1
       },
-      "connectionDownlink": 1.65,
+      "connectionDownlink": 1.5,
       "connectionKind": null,
-      "connectionRtt": 100,
+      "connectionRtt": 200,
       "connectionSaveData": false,
       "connectionType": "4g",
       "hasBattery": true,
@@ -396,7 +396,7 @@
     "nativeToString": "hardwareConcurrency:native,userAgent:native,width:native",
     "performanceNowPrecision": 0,
     "toStringTag": "[object Navigator]",
-    "totalJSHeapSize": 8508751
+    "totalJSHeapSize": 8007977
   },
   "fonts": {
     "baselineWidths": {
@@ -449,6 +449,83 @@
     "kinds": "audioinput,audiooutput,videoinput",
     "labelsEmpty": true,
     "supportedConstraints": "aspectRatio,autoGainControl,brightness,channelCount,colorTemperature,contrast,deviceId,displaySurface,echoCancellation,exposureCompensation,exposureMode,exposureTime,facingMode,focusDistance,focusMode,frameRate,groupId,height,iso,latency,noiseSuppression,pan,pointsOfInterest,resizeMode,restrictOwnAudio,sampleRate,sampleSize,saturation,sharpness,suppressLocalAudioPlayback,tilt,torch,voiceIsolation,whiteBalanceMode,width,zoom"
+  },
+  "motion": {
+    "accelerometer": {
+      "error": "NotReadableError",
+      "readings": 0,
+      "started": false,
+      "x": null,
+      "y": null,
+      "z": null
+    },
+    "devicemotion": {
+      "acceleration": {
+        "x": null,
+        "y": null,
+        "z": null
+      },
+      "accelerationIncludingGravity": {
+        "x": null,
+        "y": null,
+        "z": null
+      },
+      "accelerationNull": 2,
+      "count": 2,
+      "intervalMedian": 16,
+      "perSecond": 0.5,
+      "rotationRate": {
+        "alpha": null,
+        "beta": null,
+        "gamma": null
+      },
+      "samples": [
+        {
+          "a": [
+            null,
+            null,
+            null
+          ],
+          "g": [
+            null,
+            null,
+            null
+          ],
+          "i": 16,
+          "r": [
+            null,
+            null,
+            null
+          ],
+          "t": 1025
+        }
+      ]
+    },
+    "deviceorientation": {
+      "absolute": false,
+      "alpha": null,
+      "beta": null,
+      "count": 2,
+      "gamma": null,
+      "samples": [
+        [
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    "genericSensors": [
+      "Accelerometer",
+      "LinearAccelerationSensor",
+      "GravitySensor",
+      "Gyroscope",
+      "AbsoluteOrientationSensor",
+      "RelativeOrientationSensor"
+    ],
+    "hasDeviceMotionEvent": true,
+    "hasDeviceOrientationEvent": true,
+    "seconds": 4
   },
   "navigator": {
     "appName": "Netscape",
