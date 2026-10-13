@@ -485,10 +485,13 @@ pub fn core_outdated(exe: &std::path::Path) -> Option<String> {
 /// Per platform from 0.3.7, when only the Windows core was rebuilt (0904, the
 /// profile's name on the taskbar). One number for both would have offered
 /// every Mac a 105 MB download of the core it already had.
+///
+/// 0.3.8 rebuilt only the macOS core: 0903, a profile restoring its session
+/// quits with its last window too.
 #[cfg(windows)]
 pub const CORE_BUILD: &str = "0.3.7";
 #[cfg(not(windows))]
-pub const CORE_BUILD: &str = "0.3.5";
+pub const CORE_BUILD: &str = "0.3.8";
 
 /// `0.2.10` as (0, 2, 10); None for anything else.
 pub fn parse_release(s: &str) -> Option<(u32, u32, u32)> {
@@ -545,7 +548,7 @@ pub fn core_stale(exe: &std::path::Path) -> Option<Option<String>> {
 #[cfg(target_os = "macos")]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
     "../Frameworks/Fury Framework.framework/Versions/Current/Fury Framework",
-    "fde3171d8b79268d68e4bb16f450d45d6647bfe087a8b1b47e1c5ffcc1f869c1",
+    "ebcc89046d7990bc411b2edb919970043228cc2bee42f68a91f1e4b141e4ab8d",
 ));
 #[cfg(windows)]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
