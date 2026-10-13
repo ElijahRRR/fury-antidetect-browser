@@ -1,5 +1,5 @@
 {
-  "__collectedInMs": 4522,
+  "__collectedInMs": 4396,
   "__probeVersion": "0.3.0",
   "__redacted": true,
   "__schema": 1,
@@ -377,9 +377,9 @@
         "dischargingTime": "Infinity",
         "level": 1
       },
-      "connectionDownlink": 1.5,
+      "connectionDownlink": 1.75,
       "connectionKind": null,
-      "connectionRtt": 200,
+      "connectionRtt": 150,
       "connectionSaveData": false,
       "connectionType": "4g",
       "hasBattery": true,
@@ -394,7 +394,7 @@
       }
     },
     "nativeToString": "hardwareConcurrency:native,userAgent:native,width:native",
-    "performanceNowPrecision": 0,
+    "performanceNowPrecision": 0.10000002384185792,
     "toStringTag": "[object Navigator]",
     "totalJSHeapSize": 8007977
   },
@@ -470,10 +470,10 @@
         "y": null,
         "z": null
       },
-      "accelerationNull": 2,
-      "count": 2,
+      "accelerationNull": 1,
+      "count": 1,
       "intervalMedian": 16,
-      "perSecond": 0.5,
+      "perSecond": 0.3,
       "rotationRate": {
         "alpha": null,
         "beta": null,
@@ -497,7 +497,7 @@
             null,
             null
           ],
-          "t": 1025
+          "t": 789
         }
       ]
     },
@@ -505,7 +505,7 @@
       "absolute": false,
       "alpha": null,
       "beta": null,
-      "count": 2,
+      "count": 1,
       "gamma": null,
       "samples": [
         [
