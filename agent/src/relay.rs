@@ -122,6 +122,11 @@ pub enum RelayError {
     UpstreamUnreachable(#[source] io::Error),
     #[error("upstream refused authentication")]
     AuthRejected,
+    /// A SOCKS5 server offered a login and password that answered "no
+    /// acceptable methods": it takes neither, which usually means access is by
+    /// the caller's IP address. Not the same advice as a wrong password.
+    #[error("upstream accepts no login and password")]
+    NoLoginAccepted,
     /// The socket opened and then the far end did not behave like the protocol
     /// its address claims.
     ///
@@ -149,6 +154,9 @@ pub struct Relay {
     token: String,
     /// Set once by `serve`, read by `is_ours`: the port the probe answers on.
     port: std::sync::OnceLock<u16>,
+    /// Lets a check reach a checker on the operator's own network. Never set
+    /// for a profile; see `is_local_target` in `handle_client`.
+    allow_local: bool,
 }
 
 impl Relay {
@@ -158,7 +166,15 @@ impl Relay {
         let token: String = (0..16)
             .map(|_| format!("{:02x}", rand::random::<u8>()))
             .collect();
-        Self { upstream, blocked: Default::default(), token, port: Default::default() }
+        Self { upstream, blocked: Default::default(), token, port: Default::default(), allow_local: false }
+    }
+
+    /// For a check, not a profile: an IP checker the operator runs on their
+    /// own network is a target like any other. Nothing but the check is
+    /// served by such a relay, and only while it runs (`Via`).
+    fn reaching_local(mut self) -> Self {
+        self.allow_local = true;
+        self
     }
 
     /// Where the launcher points the first tab. Carries the token, and the
@@ -324,7 +340,7 @@ impl Relay {
         // were answered above; everything else aimed at loopback, link-local or
         // RFC 1918 space fails HERE, on the same path as an unreachable
         // upstream, so an open port and a closed one are indistinguishable.
-        if is_local_target(&host) {
+        if !self.allow_local && is_local_target(&host) {
             tracing::debug!(target = %host, "local address refused");
             let _ = client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
@@ -416,6 +432,59 @@ impl Relay {
                 Ok(Conn::Tunnel(stream))
             }
         }
+    }
+}
+
+/// An HTTP client whose requests leave the way a profile's do: through a relay
+/// of its own over `upstream`, so through `socks5_connect` / `http_connect`.
+///
+/// For the proxy check and the exit lookups. They used to hand the proxy URL to
+/// reqwest, whose SOCKS5 client (hyper-util) is a second implementation and a
+/// stricter one: it refuses a login reply whose version byte is not 1 and a
+/// CONNECT reply whose reserved byte is not 0, both of which this relay and
+/// curl take. A tester's residential SOCKS5 proxy (13.10.2026) passed curl from
+/// his machine, US exit, while the check said "SOCKS error: failed parsing
+/// server response". A check that disagrees with the browser it is checking
+/// for is wrong either way, so now there is one implementation.
+///
+/// The relay stops when this is dropped.
+pub struct Via {
+    client: reqwest::Client,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Via {
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+}
+
+impl Drop for Via {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+pub async fn via(upstream: Upstream, timeout: std::time::Duration) -> anyhow::Result<Via> {
+    let (port, task) = Relay::new(upstream).reaching_local().serve(0).await?;
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?)
+        .timeout(timeout)
+        .build()?;
+    Ok(Via { client, task })
+}
+
+/// Why a request through [`via`] failed, in the relay's own words: the relay
+/// answers a failed upstream with a bare 502, so the cause is asked for again
+/// with the same handshake, to the same target.
+pub async fn explain(upstream: Upstream, endpoint: &str) -> Option<RelayError> {
+    let url = reqwest::Url::parse(endpoint).ok()?;
+    let host = url.host_str()?.to_string();
+    let port = url.port_or_known_default()?;
+    let relay = Relay::new(upstream).reaching_local();
+    match tokio::time::timeout(std::time::Duration::from_secs(20), relay.dial(&host, port)).await {
+        Ok(Err(e)) => Some(e),
+        _ => None,
     }
 }
 
@@ -680,6 +749,7 @@ async fn socks5_connect(
                 return Err(RelayError::AuthRejected);
             }
         }
+        0xff if auth.is_some() => return Err(RelayError::NoLoginAccepted),
         _ => return Err(RelayError::AuthRejected),
     }
 
@@ -1309,8 +1379,93 @@ mod tests {
 
         // Mapped to () so a failure can be printed: a live socket is not Debug.
         match relay.dial("example.com", 443).await.map(|_| ()) {
-            Err(RelayError::AuthRejected) => {}
+            Err(RelayError::NoLoginAccepted) => {}
             other => panic!("expected an auth refusal, got {other:?}"),
+        }
+    }
+
+    /// A SOCKS5 server that wants a login and bends RFC 1929/1928 in one place,
+    /// then answers one HTTP request with a small JSON body, as an IP checker.
+    async fn quirky_socks5(auth_reply: &'static [u8], connect_reply: &'static [u8]) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = s.read(&mut buf).await; // greeting
+                    let _ = s.write_all(&[0x05, 0x02]).await;
+                    let _ = s.read(&mut buf).await; // login
+                    let _ = s.write_all(auth_reply).await;
+                    let _ = s.read(&mut buf).await; // CONNECT
+                    let _ = s.write_all(connect_reply).await;
+                    let mut head = Vec::new();
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match s.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let body = br#"{"ip":"192.0.2.7"}"#;
+                    let _ = s
+                        .write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes())
+                        .await;
+                    let _ = s.write_all(body).await;
+                });
+            }
+        });
+        port
+    }
+
+    /// The check goes the profile's way, so a proxy the browser can use passes
+    /// it (tester, 13.10.2026: curl through his SOCKS5 proxy reached ipinfo.io
+    /// from his machine; the check said "SOCKS error: failed parsing server
+    /// response"). Two departures from the RFCs that reqwest's SOCKS5 client
+    /// refuses and this relay, like curl, takes: a login reply with version 5
+    /// instead of 1, and a CONNECT reply whose reserved byte is not 0. Which
+    /// one his provider sends is not known -- its login does not work from
+    /// here -- so both are pinned.
+    #[tokio::test]
+    async fn a_check_passes_a_proxy_the_profile_can_use() {
+        const OK_CONNECT: &[u8] = &[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+        const RSV_CONNECT: &[u8] = &[0x05, 0x00, 0x01, 0x01, 0, 0, 0, 0, 0, 0];
+        for (name, auth, connect) in [
+            ("login reply version 5", &[0x05u8, 0x00][..], OK_CONNECT),
+            ("reserved byte 1", &[0x01u8, 0x00][..], RSV_CONNECT),
+        ] {
+            let port = quirky_socks5(auth, connect).await;
+            let upstream = Upstream::Socks5 {
+                host: "127.0.0.1".into(),
+                port,
+                auth: Some(Credentials { username: "u__cr.us;sessttl.60".into(), password: "p".into() }),
+            };
+            let via = via(upstream, std::time::Duration::from_secs(10)).await.unwrap();
+            let body: serde_json::Value = via
+                .client()
+                .get("http://exit.test/json")
+                .send()
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"))
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(body["ip"], "192.0.2.7", "{name}");
+
+            // The control: the same server through reqwest's own SOCKS5
+            // client gives the tester's sentence.
+            let direct = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all(format!("socks5h://u:p@127.0.0.1:{port}")).unwrap())
+                .build()
+                .unwrap();
+            let e = direct.get("http://exit.test/json").send().await.expect_err(name);
+            let mut chain = e.to_string();
+            let mut src = std::error::Error::source(&e);
+            while let Some(s) = src {
+                chain.push_str(&format!(" | {s}"));
+                src = s.source();
+            }
+            assert!(chain.contains("failed parsing server response"), "{name}: {chain}");
         }
     }
 

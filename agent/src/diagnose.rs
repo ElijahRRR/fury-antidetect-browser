@@ -287,6 +287,10 @@ fn classify_io(e: &std::io::Error, host: &str, port: u16) -> (&'static str, Stri
 fn classify_relay(e: &RelayError, target: &str) -> (&'static str, String) {
     match e {
         RelayError::AuthRejected => ("auth", "the proxy refused the username or password".to_string()),
+        RelayError::NoLoginAccepted => (
+            "auth",
+            "the proxy takes no username and password at all — access is probably by this computer's IP address, set at the provider".to_string(),
+        ),
         RelayError::ConnectRejected { reason, .. } => (
             "connect_rejected",
             format!("the proxy accepted us but would not open {target}:443 — {reason}. Usually an exhausted plan, a blocked destination, or a proxy that only allows certain ports"),
@@ -303,11 +307,10 @@ fn classify_relay(e: &RelayError, target: &str) -> (&'static str, String) {
 
 async fn fetch_exit(url: &str, endpoint: &str) -> anyhow::Result<Exit> {
     let (endpoint, geo_db) = crate::geoip::split_checker(endpoint);
-    let client = reqwest::Client::builder()
-        .proxy(reqwest::Proxy::all(url)?)
-        .timeout(Duration::from_secs(15))
-        .build()?;
-    let body: serde_json::Value = client.get(&endpoint).send().await?.json().await?;
+    // Through the profile's own handshake, as the tunnel step above: see
+    // `relay::via` for the second SOCKS5 client this used to be.
+    let via = crate::relay::via(crate::parse_upstream(url)?, Duration::from_secs(15)).await?;
+    let body: serde_json::Value = via.client().get(&endpoint).send().await?.json().await?;
     let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(str::to_string);
     // Same overlay as the check: a pasted database path resolves geo here
     // too rather than only where the button is.

@@ -80,34 +80,44 @@ fn refusal(id: &str, e: &anyhow::Error) -> serde_json::Value {
 
 /// Why a proxy check failed, as (code, sentence).
 ///
-/// reqwest calls a refused SOCKS login, a SOCKS server that will not take a
-/// login at all, and a port nothing listens on all `is_connect`, and the check
-/// said "Could not connect to the proxy." for every one of them. A tester with
-/// a working-looking socks5 line got that and nothing to act on (12.10.2026).
-/// The cause is at the bottom of the error's source chain, measured against a
-/// fake SOCKS5 server: "credentials not accepted", "server does not support
-/// user/pass authentication", "failed to create underlying connection"; an
-/// HTTP proxy that refuses says "tunnel error: unsuccessful".
-fn check_failure(e: &reqwest::Error) -> (&'static str, String) {
-    let mut chain = vec![e.to_string()];
+/// A refused login, a SOCKS server that takes no login at all and a port
+/// nothing listens on all used to read "Could not connect to the proxy." A
+/// tester with a working-looking socks5 line got that and nothing to act on
+/// (12.10.2026). The check goes through the relay now (`relay::via`), whose
+/// error names the cause; this reads the relay's error when there is one and
+/// reqwest's when the proxy was fine and the request after it was not.
+async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: &reqwest::Error) -> (&'static str, String) {
+    use crate::relay::RelayError;
+    if e.is_timeout() {
+        return ("timeout", "The proxy did not answer in time.".into());
+    }
+    match crate::relay::explain(upstream.clone(), endpoint).await {
+        Some(RelayError::AuthRejected) => {
+            return ("socksAuth", "The proxy refused the login and password.".into())
+        }
+        Some(RelayError::NoLoginAccepted) => {
+            return ("socksNoLogin", "The proxy does not accept a login and password; it may allow this computer's IP address instead.".into())
+        }
+        Some(RelayError::UpstreamUnreachable(io)) => {
+            return ("unreachable", format!("Nothing answers at this address and port ({io})."))
+        }
+        Some(RelayError::ConnectRejected { reason, .. }) => {
+            return ("tunnel", format!("The proxy answered but refused to connect onward ({reason})."))
+        }
+        Some(other) => return ("connect", format!("Could not connect to the proxy ({other}).")),
+        None => {}
+    }
+    reqwest_failure(e)
+}
+
+fn reqwest_failure(e: &reqwest::Error) -> (&'static str, String) {
+    let mut cause = e.to_string();
     let mut src = std::error::Error::source(e);
     while let Some(s) = src {
-        chain.push(s.to_string());
+        cause = s.to_string();
         src = s.source();
     }
-    let all = chain.join(" | ").to_ascii_lowercase();
-    let cause = chain.last().cloned().unwrap_or_default();
-    if e.is_timeout() {
-        ("timeout", "The proxy did not answer in time.".into())
-    } else if all.contains("credentials not accepted") {
-        ("socksAuth", format!("The proxy refused the login and password ({cause})."))
-    } else if all.contains("does not support user/pass") || all.contains("no acceptable auth") {
-        ("socksNoLogin", format!("The proxy does not accept a login and password; it may allow this computer's IP address instead ({cause})."))
-    } else if all.contains("underlying connection") || all.contains("connection refused") {
-        ("unreachable", format!("Nothing answers at this address and port ({cause})."))
-    } else if all.contains("tunnel error") {
-        ("tunnel", format!("The proxy answered but refused to connect onward ({cause})."))
-    } else if e.is_connect() {
+    if e.is_connect() {
         ("connect", format!("Could not connect to the proxy ({cause})."))
     } else {
         ("other", format!("The check failed: {cause}"))
@@ -1171,15 +1181,14 @@ impl Agent {
                 // exit IP still comes from the far end, geo from the file.
                 let (endpoint, geo_db) = crate::geoip::split_checker(&endpoint);
 
-                let client = reqwest::Client::builder()
-                    .proxy(reqwest::Proxy::all(&url)?)
-                    // Short: a proxy that takes longer than this to answer is
-                    // not one anybody wants to browse through.
-                    .timeout(std::time::Duration::from_secs(15))
-                    .build()?;
+                // Through the relay a profile uses, not reqwest's own SOCKS5
+                // client: see `relay::via`. Short timeout: a proxy that takes
+                // longer than this to answer is not one anybody wants to
+                // browse through.
+                let via = crate::relay::via(upstream.clone(), std::time::Duration::from_secs(15)).await?;
 
                 let started = std::time::Instant::now();
-                let body: serde_json::Value = match client.get(&endpoint).send().await {
+                let body: serde_json::Value = match via.client().get(&endpoint).send().await {
                     Ok(res) => res.json().await.unwrap_or(serde_json::Value::Null),
                     Err(e) => {
                         // Before reporting silence, find out whether the far
@@ -1197,7 +1206,7 @@ impl Agent {
                         if let Some(kind) = suggested {
                             tracing::info!(kind, "the proxy answers on another protocol");
                         }
-                        let (code, error) = check_failure(&e);
+                        let (code, error) = check_failure(&upstream, &endpoint, &e).await;
                         return Ok(json!({
                             "ok": false,
                             "error": error,
@@ -2306,15 +2315,24 @@ impl Agent {
             .unwrap_or_else(|| "https://ipinfo.io/json".to_string());
         let (endpoint, geo_db) = crate::geoip::split_checker(&endpoint);
 
-        let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
-        builder = match url {
-            Some(u) => builder.proxy(reqwest::Proxy::all(u)?),
+        // Through the relay, as the profile's own traffic and the check go:
+        // see `relay::via`. Held in `via` until the body is read.
+        let timeout = std::time::Duration::from_secs(15);
+        let via = match url {
+            Some(u) => Some(crate::relay::via(crate::parse_upstream(u)?, timeout).await?),
+            None => None,
+        };
+        let direct;
+        let client = match &via {
+            Some(v) => v.client(),
             // Explicit rather than merely absent: reqwest reads the system
             // proxy environment by default, and a profile told to go out
             // without a proxy must not pick one up from a shell variable.
-            None => builder.no_proxy(),
+            None => {
+                direct = reqwest::Client::builder().timeout(timeout).no_proxy().build()?;
+                &direct
+            }
         };
-        let client = builder.build()?;
 
         let body: serde_json::Value = client.get(&endpoint).send().await?.json().await?;
         let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(str::to_string);
