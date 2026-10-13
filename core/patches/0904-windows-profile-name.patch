@@ -1,0 +1,103 @@
+diff --git a/chrome/browser/ui/views/frame/BUILD.gn b/chrome/browser/ui/views/frame/BUILD.gn
+index ee117be4ec..9e9652f932 100644
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -958,6 +958,7 @@ if (is_win) {
+       "//components/prefs",
+     ]
+     deps = [
++      "//components/fury",
+       "//chrome/browser:browser_process",
+       "//chrome/browser/profiles",
+       "//chrome/browser/profiles:misc",
+diff --git a/chrome/browser/ui/views/frame/browser_window_property_manager_win.cc b/chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
+index 00445dbee1..89ddd0c451 100644
+--- a/chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
++++ b/chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/browser_window_property_manager_win.h"
+ 
++#include "components/fury/fury_config.h"
++
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -104,6 +106,31 @@ void BrowserWindowPropertyManager::UpdateWindowProperties() {
+                                             &pinned_name, &icon_path);
+     command_line_string = command_line.GetCommandLineString();
+   }
++  // Fury patch 0904: the taskbar names the profile, and the window cannot be
++  // pinned.
++  //
++  // A pinned browser window relaunches through its relaunch command, which
++  // is this executable with no Fury config: a profile directory opened with
++  // no persona and no proxy, from the operator's own address. So a window
++  // of a Fury profile is never pinnable, whatever else is set, and the name
++  // Windows shows for the group is the profile's (RelaunchDisplayNameResource
++  // is only read beside a RelaunchCommand, so one is given; with pinning
++  // prevented it is never run).
++  const fury::FuryConfig* fury_config = fury::FuryConfig::Get();
++  std::optional<std::string> fury_name =
++      fury_config ? fury_config->GetString("window.profileName") : std::nullopt;
++  if (fury_config) {
++    ui::win::PreventWindowFromPinning(hwnd_);
++  }
++  if (fury_name && !fury_name->empty() &&
++      (browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL ||
++       browser->GetType() == BrowserWindowInterface::Type::TYPE_POPUP)) {
++    pinned_name = base::UTF8ToWide(*fury_name);
++    if (command_line_string.empty()) {
++      command_line_string =
++          base::CommandLine::ForCurrentProcess()->GetCommandLineString();
++    }
++  }
+   ui::win::SetAppDetailsForWindow(app_id, icon_path, 0, command_line_string,
+                                   pinned_name, hwnd_);
+ }
+diff --git a/chrome/browser/ui/window_metadata/BUILD.gn b/chrome/browser/ui/window_metadata/BUILD.gn
+index d915345c05..cbc0a90d93 100644
+--- a/chrome/browser/ui/window_metadata/BUILD.gn
++++ b/chrome/browser/ui/window_metadata/BUILD.gn
+@@ -21,6 +21,7 @@ source_set("window_metadata") {
+   ]
+ 
+   deps = [
++    "//components/fury",
+     "//chrome/app:generated_resources",
+     "//chrome/browser/picture_in_picture",
+     "//chrome/browser/sessions",
+diff --git a/chrome/browser/ui/window_metadata/window_metadata_controller.cc b/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+index 2e7435be55..9598a4eccc 100644
+--- a/chrome/browser/ui/window_metadata/window_metadata_controller.cc
++++ b/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
+ 
++#include "components/fury/fury_config.h"
++
+ #include <string>
+ 
+ #include "base/strings/utf_string_conversions.h"
+@@ -248,6 +250,20 @@ std::u16string WindowMetadataController::GetWindowTitleFromWebContents(
+                                        ->create_params()
+                                        .app_name);
+   }
++  // Fury patch 0904: the profile's name where Chromium puts its own, so a
++  // window says which account it is on the taskbar, in its thumbnail and in
++  // Alt+Tab ("Inbox - kg-seo 1", not "Inbox - Fury"). Every profile is the
++  // same core, so the product name told five windows apart by nothing.
++  if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL ||
++       browser_->GetType() == BrowserWindowInterface::Type::TYPE_POPUP) &&
++      include_app_name) {
++    if (const fury::FuryConfig* config = fury::FuryConfig::Get()) {
++      std::optional<std::string> name = config->GetString("window.profileName");
++      if (name && !name->empty()) {
++        return title + u" - " + base::UTF8ToUTF16(*name);
++      }
++    }
++  }
+   // Include the app name in window titles for tabbed browser windows when
+   // requested with |include_app_name|.
+   return ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL ||

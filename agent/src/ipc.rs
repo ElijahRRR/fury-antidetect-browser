@@ -2670,6 +2670,12 @@ impl Agent {
         let ui_locale = ctx.ui_locale.clone();
         let mut config = persona.derive_core_config(profile.fp_seed as u64, &ctx);
         profile.overrides.apply_config(&mut config);
+        // The window's name on the Windows taskbar (patch 0904). Not part of
+        // the persona: it is what the operator calls the profile, and nothing
+        // a page can read -- the window title is the browser's own.
+        if let Some(name) = crate::dock::display_name(&profile.name) {
+            config["window"] = serde_json::json!({ "profileName": name });
+        }
 
         // Local mode has no roles to enforce: whoever can reach this socket
         // owns the machine and the data. Restrictions are a team-server concept

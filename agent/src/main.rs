@@ -141,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
                        --url URL           page to open\n        \
                        --debug-port N      expose CDP on 127.0.0.1:N\n        \
                        --extension DIR     load an unpacked extension (repeatable)\n        \
+                       --profile-name NAME name the window as the app does (title, taskbar)\n        \
                        --real-canvas       the machine's own canvas instead of noise\n  \
                    fury-agent check-fingerprint <config.json>\n      \
                      Validate a fingerprint config for internal consistency.\n      \
@@ -351,6 +352,11 @@ async fn cmd_launch(args: &[String]) -> anyhow::Result<()> {
         None => relay.iter().map(|(_, _, start)| start.clone()).collect(),
     };
 
+    // What the app sets from the profile's name (patch 0904: the window title
+    // and the Windows taskbar), for checking it without the app.
+    if let Some(name) = opt("--profile-name").as_deref().and_then(crate::dock::display_name) {
+        config["window"] = serde_json::json!({ "profileName": name });
+    }
     let extensions: Vec<std::path::PathBuf> = args
         .windows(2)
         .filter(|w| w[0] == "--extension")

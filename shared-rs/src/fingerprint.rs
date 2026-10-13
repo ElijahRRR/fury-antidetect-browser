@@ -557,6 +557,7 @@ pub const CORE_CONFIG_KEYS: &[&str] = &[
     "screen.width",
     "speech.voices",
     "webrtc.ipHandlingPolicy",
+    "window.profileName",
 ];
 
 /// Keys whose whole branch is optional, and the branch that decides.
@@ -604,6 +605,10 @@ const OPTIONAL_BRANCHES: &[(&str, &[&str])] = &[
             "geolocation.longitude",
         ],
     ),
+    // Not part of a persona: the agent adds the profile's name at launch
+    // (patch 0904, the Windows taskbar). A config without it is a launch
+    // that did not name the window, which is the CLI's.
+    ("window", &["window.profileName"]),
 ];
 
 /// Checks that a core config carries everything the core will look for.

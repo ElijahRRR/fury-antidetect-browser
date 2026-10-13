@@ -41,7 +41,6 @@ use std::path::{Path, PathBuf};
 /// component -- `/`, and `:` which Finder shows as `/` -- become `-`, control
 /// characters go, a leading dot (a hidden directory) goes, and it is kept to
 /// a length the Dock can show anyway.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn display_name(name: &str) -> Option<String> {
     let cleaned: String = name
         .chars()
