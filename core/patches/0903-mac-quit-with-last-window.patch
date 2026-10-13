@@ -1,19 +1,95 @@
 diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
-index cb1b5aa8be..52eb1ea790 100644
+index cb1b5aa8be..0073aa1a0d 100644
 --- a/chrome/browser/app_controller_mac.mm
 +++ b/chrome/browser/app_controller_mac.mm
-@@ -765,6 +765,10 @@ @implementation AppController {
+@@ -78,6 +78,7 @@
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_live_tab_context.h"
+ #include "chrome/browser/ui/browser_mac.h"
++#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -586,12 +587,43 @@ - (BOOL)isProfileReady;
+ // Chrome is no longer hidden.
+ - (void)resetKeepAliveWhileHidden;
+ 
++// Fury: lets the last browser window's close quit the application.
++- (void)furyQuitWithLastWindow;
++
+ // A callback that updates the relevant commands in the tab menu that depend on
+ // position of the tab strip.
+ - (void)onVerticalTabStripModeChanged:
+     (tabs::VerticalTabStripStateController*)stateController;
+ @end
+ 
++// Fury: tells the AppController when the first browser window exists, for a
++// launch whose window only comes after -applicationDidFinishLaunching:. A
++// profile with a session to restore is one: its windows are not there yet
++// when AppKit finishes launching.
++class FuryFirstBrowserObserver : public BrowserCollectionObserver {
++ public:
++  FuryFirstBrowserObserver() {
++    observation_.Observe(GlobalBrowserCollection::GetInstance());
++  }
++  FuryFirstBrowserObserver(const FuryFirstBrowserObserver&) = delete;
++  FuryFirstBrowserObserver& operator=(const FuryFirstBrowserObserver&) =
++      delete;
++  ~FuryFirstBrowserObserver() override = default;
++
++  // BrowserCollectionObserver:
++  void OnBrowserCreated(BrowserWindowInterface* browser) override {
++    if (!released_) {
++      released_ = true;
++      [AppController.sharedController furyQuitWithLastWindow];
++    }
++  }
++
++ private:
++  bool released_ = false;
++  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
++      observation_{this};
++};
++
+ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+                                      public ProfileManagerObserver,
+                                      public ProfileObserver {
+@@ -765,6 +797,11 @@ @implementation AppController {
    // recreate `_keepAlive` if and when the activation policy changes.
    std::unique_ptr<ScopedKeepAlive> _keepAlive;
  
 +  // Fury: set once the first window is up, after which closing the last
 +  // window quits, as it does on Windows. See applicationDidFinishLaunching.
 +  BOOL _furyQuitWithLastWindow;
++  std::unique_ptr<FuryFirstBrowserObserver> _furyFirstBrowserObserver;
 +
    // Set to `NSRunningApplication.currentApplication` while we're observing
    // the `activationPolicy` of ourselves.
    NSRunningApplication* __strong _runningApplication;
-@@ -1342,6 +1346,23 @@ - (void)applicationDidFinishLaunching:(NSNotification*)notify {
+@@ -1081,6 +1118,7 @@ - (void)applicationWillTerminate:(NSNotification*)aNotification {
+   [self setLastProfile:nullptr];
+ 
+   _profileAttributesStorageObserver.reset();
++  _furyFirstBrowserObserver.reset();
+   [self unregisterEventHandlers];
+   _profileBookmarkMenuBridgeMap.clear();
+ }
+@@ -1268,6 +1306,14 @@ - (void)openStartupTabsReplacingNTP:(StartupTabs)tabs {
+   OpenStartupTabsInBrowser(std::move(tabs));
+ }
+ 
++- (void)furyQuitWithLastWindow {
++  if (_furyQuitWithLastWindow || !_keepAlive) {
++    return;
++  }
++  _keepAlive.reset();
++  _furyQuitWithLastWindow = YES;
++}
++
+ - (void)resetKeepAliveWhileHidden {
+   NSRunningApplication* app = NSRunningApplication.currentApplication;
+   if (_keepAlive &&
+@@ -1342,6 +1388,28 @@ - (void)applicationDidFinishLaunching:(NSNotification*)notify {
    [self updateHandoffManager:activeWebContents];
    [self openStartupUrls];
  
@@ -27,17 +103,22 @@ index cb1b5aa8be..52eb1ea790 100644
 +  // Browser holds a keep-alive of its own, so once a window exists this one
 +  // is only what keeps the process up without any; releasing it here gives
 +  // the Windows lifecycle, and the ordinary shutdown path with it. Nothing a
-+  // page can observe changes. With no window yet -- not a launch the agent
-+  // makes -- the keep-alive stays, which is Chrome's behaviour.
-+  if (browser && _keepAlive) {
-+    _keepAlive.reset();
-+    _furyQuitWithLastWindow = YES;
++  // page can observe changes.
++  //
++  // Released when the first window exists, which is not always by now: a
++  // profile restoring its session (the agent passes --restore-last-session)
++  // has none here and gets it a moment later. Checking only here kept the
++  // keep-alive for every profile after its first launch (reported
++  // 13.10.2026). A launch that never opens a window keeps it, as Chrome does.
++  _furyFirstBrowserObserver = std::make_unique<FuryFirstBrowserObserver>();
++  if (!GlobalBrowserCollection::GetInstance()->IsEmpty()) {
++    [self furyQuitWithLastWindow];
 +  }
 +
    PrefService* localState = g_browser_process->local_state();
    if (localState) {
      _localPrefRegistrar.Init(localState);
-@@ -1381,6 +1402,9 @@ - (void)observeValueForKeyPath:(NSString*)keyPath
+@@ -1381,6 +1449,9 @@ - (void)observeValueForKeyPath:(NSString*)keyPath
                               forKeyPath:@"activationPolicy"
                                  context:nullptr];
      _runningApplication = nil;
@@ -47,3 +128,15 @@ index cb1b5aa8be..52eb1ea790 100644
      _keepAlive = std::make_unique<ScopedKeepAlive>(
          KeepAliveOrigin::APP_CONTROLLER, KeepAliveRestartOption::DISABLED);
    }
+@@ -1691,7 +1762,10 @@ - (void)commandDispatch:(id)sender {
+   // If not between -applicationDidFinishLaunching: and
+   // -applicationWillTerminate:, ignore. This can happen when events are sitting
+   // in the event queue while the browser is shutting down.
+-  if (!_keepAlive) {
++  //
++  // Fury: with the keep-alive released for 0903 that is what
++  // `_furyQuitWithLastWindow` and `_isShuttingDown` say instead.
++  if ((!_keepAlive && !_furyQuitWithLastWindow) || _isShuttingDown) {
+     return;
+   }
+ 
