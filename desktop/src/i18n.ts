@@ -528,6 +528,9 @@ const en = {
     "One real machine's measured configuration, taken whole. Picking a user agent and a GPU separately is how profiles end up describing devices that do not exist.",
   "pd.share": "{pct}% of real machines",
   "pd.measured": "measured",
+  "pd.captured": "captured from a real machine",
+  "pd.ownMachines": "Your machines",
+  "pd.catalogue": "Catalogue",
   "pd.timezone": "Time zone",
   "pd.timezoneHint":
     "Leave empty to follow the proxy's exit — resolved at launch, so it can never disagree with the address the traffic comes from.",
@@ -1567,6 +1570,9 @@ const ru: Record<Key, string> = {
     "Замеренная конфигурация реального компьютера, целиком. Выбор user-agent и видеокарты по отдельности — это и есть способ получить профиль, описывающий несуществующее устройство.",
   "pd.share": "{pct}% реальных машин",
   "pd.measured": "измерено",
+  "pd.captured": "снята с реальной машины",
+  "pd.ownMachines": "Ваши машины",
+  "pd.catalogue": "Каталог",
   "pd.timezone": "Часовой пояс",
   "pd.timezoneHint":
     "Оставьте пустым, чтобы следовать за выходом прокси — определяется при запуске и потому не может разойтись с адресом, с которого идёт трафик.",

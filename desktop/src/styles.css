@@ -1051,6 +1051,14 @@ input::placeholder {
   align-self: start;
 }
 
+/* "Your machines" / "Catalogue" over the two halves of the machine list. */
+.personaGroup {
+  margin: 0 0 var(--s-1);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.personaList > div + div > .personaGroup { margin-top: var(--s-3); }
+
 .personaCard {
   display: block;
   width: 100%;

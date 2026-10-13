@@ -337,6 +337,8 @@ export interface Persona {
   screen: string;
   weight: number;
   source: string | null;
+  /** Not built in: captured here, fetched from the team, or FURY_PERSONAS. */
+  own?: boolean;
 }
 
 /** A machine in this computer's personas folder: captured here, or an

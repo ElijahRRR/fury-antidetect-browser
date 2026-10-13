@@ -755,34 +755,56 @@ export function ProfileDialog({
                 <div className="field grow">
                   <label>{t("pd.machine")}</label>
                   <div className="personaList">
-                    {personas.map((p) => (
-                      <button
-                        key={p.id}
-                        ref={p.id === personaId ? selectedCard : undefined}
-                        className="personaCard"
-                        aria-pressed={p.id === personaId}
-                        disabled={machineLocked && p.id !== personaId}
-                        onClick={() => {
-                          // Another OS takes a different list of screens and
-                          // GPUs; a pinned one from the old list would only be
-                          // refused, so it goes with the machine it came from.
-                          const was = personas.find((x) => x.id === personaId)?.os.split(" ")[0];
-                          if (was && was !== p.os.split(" ")[0]) setOv({ gpu: undefined, screen: undefined });
-                          setPersonaId(p.id);
-                        }}
-                      >
-                        <div className="name">
-                          {p.os} · {p.screen}
+                    {/* Machines of one's own above the catalogue, under their
+                        own heading: mixed in by share, a capture sank to the
+                        bottom of fourteen others and a tester asked for a list
+                        of his own (13.10.2026). */}
+                    {[
+                      { own: true, title: t("pd.ownMachines") },
+                      { own: false, title: t("pd.catalogue") },
+                    ].map((g) => {
+                      const list = personas.filter((p) => !!p.own === g.own);
+                      if (list.length === 0) return null;
+                      return (
+                        <div key={String(g.own)}>
+                          {personas.some((p) => p.own) && (
+                            <div className="muted small personaGroup">{g.title}</div>
+                          )}
+                          {list.map((p) => (
+                            <button
+                              key={p.id}
+                              ref={p.id === personaId ? selectedCard : undefined}
+                              className="personaCard"
+                              aria-pressed={p.id === personaId}
+                              disabled={machineLocked && p.id !== personaId}
+                              onClick={() => {
+                                // Another OS takes a different list of screens and
+                                // GPUs; a pinned one from the old list would only be
+                                // refused, so it goes with the machine it came from.
+                                const was = personas.find((x) => x.id === personaId)?.os.split(" ")[0];
+                                if (was && was !== p.os.split(" ")[0]) setOv({ gpu: undefined, screen: undefined });
+                                setPersonaId(p.id);
+                              }}
+                            >
+                              <div className="name">
+                                {p.os} · {p.screen}
+                              </div>
+                              <div className="muted small sub">
+                                <span className="gpu">{p.gpu}</span>
+                                <span className="share">
+                                  {/* A machine of one's own has no share of anything:
+                                      its weight is a placeholder, not a census. */}
+                                  {p.own
+                                    ? t("pd.captured")
+                                    : t("pd.share", { pct: (p.weight * 100).toFixed(1) })}
+                                  {p.source === "measured" ? ` · ${t("pd.measured")}` : ""}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
                         </div>
-                        <div className="muted small sub">
-                          <span className="gpu">{p.gpu}</span>
-                          <span className="share">
-                            {t("pd.share", { pct: (p.weight * 100).toFixed(1) })}
-                            {p.source === "measured" ? ` · ${t("pd.measured")}` : ""}
-                          </span>
-                        </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                     <p className="hint">
                       {machineLocked ? t("pd.machineLockedTeam") : t("pd.machineHint")}
                     </p>

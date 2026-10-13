@@ -29,9 +29,14 @@ pub struct PersonaSummary {
     /// they hide in.
     pub weight: f64,
     pub source: Option<String>,
+    /// Not built in: captured on this computer, fetched from the team, or from
+    /// FURY_PERSONAS. The picker lists these apart, above the catalogue, where
+    /// a tester expected his own machines to be (13.10.2026).
+    pub own: bool,
 }
 
 pub fn catalogue() -> Vec<PersonaSummary> {
+    let builtin: Vec<String> = fury_shared::catalogue::all().into_iter().map(|p| p.id).collect();
     let mut personas = all();
     // Commonest first. Sorting here rather than in the table keeps the table
     // grouped by family, which is how it is read and edited.
@@ -39,11 +44,12 @@ pub fn catalogue() -> Vec<PersonaSummary> {
     personas
         .into_iter()
         .map(|p| PersonaSummary {
-            os: format!("{} {}", p.os.name, p.os.version),
+            os: format!("{} {}", p.os.name, p.os.display_version()),
             gpu: p.gpu.webgl_renderer.clone(),
             screen: format!("{}×{}", p.screen.width, p.screen.height),
             weight: p.weight,
             source: p.source.clone(),
+            own: !builtin.contains(&p.id),
             id: p.id,
         })
         .collect()
