@@ -49,7 +49,8 @@ export function spreadPastedProxy(
     const text = e.clipboardData.getData("text").trim();
     // A line with no separator is a hostname and nothing else. Let the
     // browser paste it and do not make a round trip to say so.
-    if (!text || !/[:@]/.test(text) || text.includes("\n")) return;
+    // Spaces, tabs, ';' and '|' separate fields too (`ip port user pass`).
+    if (!text || !/[:@\s;|]/.test(text) || text.includes("\n")) return;
     e.preventDefault();
     const input = e.currentTarget;
     void api.parseProxyLine(text).then((p) => {

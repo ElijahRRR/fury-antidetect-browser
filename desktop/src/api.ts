@@ -393,7 +393,7 @@ export interface ParsedProxyLine {
   port: number;
   username: string | null;
   password: string | null;
-  shape: "Url" | "HostPort" | "HostPortUserPass" | "AtSign";
+  shape: "Url" | "HostPort" | "HostPortUserPass" | "AtSign" | "UserPassHostPort" | "HostPortAtUserPass";
 }
 
 export interface LocalProxy {
@@ -953,6 +953,8 @@ export const api = {
   checkProxy: (url: string, checkerUrl?: string | null, proxyId?: string | null): Promise<{
     ok: boolean; error?: string; ip?: string; country?: string;
     city?: string; timezone?: string; org?: string; ms?: number;
+    /** Why it failed, for the interface's own sentence (ipc.rs check_failure). */
+    error_code?: string | null;
     /** A protocol this address DOES answer on, when the one it was given got
      *  nothing. Present only on a failure, and only when the other family
      *  actually worked — see agent/src/diagnose.rs `speaks_instead`. */

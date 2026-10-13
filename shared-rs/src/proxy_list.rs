@@ -55,6 +55,12 @@ pub enum Shape {
     HostPortUserPass,
     /// `user:pass@host:port` with no scheme.
     AtSign,
+    /// `user:pass:host:port`, read that way only when field 2 cannot be a
+    /// port, so the line has no other reading.
+    UserPassHostPort,
+    /// `host:port@user:pass`, read that way only when what follows the @
+    /// cannot be a host:port.
+    HostPortAtUserPass,
 }
 
 impl ParsedProxy {
@@ -115,6 +121,31 @@ pub fn parse_block(text: &str) -> Vec<(usize, Result<ParsedProxy, ParseError>)> 
 
 /// Parse one line.
 pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
+    let strict = parse_strict(line);
+    if strict.is_ok() {
+        return strict;
+    }
+    // Other separators between the fields: `ip:port user pass`, `ip port user
+    // pass`, `ip:port;user;pass`, `ip:port|user|pass`, tab-separated columns
+    // copied out of a spreadsheet. Tried only after the line failed as it was,
+    // so a password with a space or a `|` in it, in a shape that already
+    // parses, is never cut. A tester's lines "were not spread into the fields
+    // at all" (12.10.2026).
+    let line = line.trim();
+    if !line.contains("://") && !line.contains('@') && line.contains([' ', '\t', ';', '|']) {
+        let joined = line
+            .split([' ', '\t', ';', '|'])
+            .filter(|f| !f.is_empty())
+            .collect::<Vec<_>>()
+            .join(":");
+        if let Ok(p) = parse_strict(&joined) {
+            return Ok(p);
+        }
+    }
+    strict
+}
+
+fn parse_strict(line: &str) -> Result<ParsedProxy, ParseError> {
     let line = line.trim();
     if line.is_empty() {
         return Err(err("empty", "empty line"));
@@ -155,6 +186,22 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
 
     if let Some((scheme, rest)) = line.split_once("://") {
         let scheme = normalise_scheme(scheme)?;
+        // `socks5://host:port:user:pass`: a scheme in front of the supplier
+        // shape. Only with no @ and a port in field 2.
+        if !rest.contains('@') && !rest.starts_with('[') {
+            // splitn: a password may contain colons, as in the @ form.
+            let parts: Vec<&str> = rest.splitn(4, ':').collect();
+            if parts.len() == 4 && parts[1].parse::<u16>().is_ok_and(|p| p != 0) && !parts[0].is_empty() {
+                return Ok(ParsedProxy {
+                    scheme,
+                    host: parts[0].to_string(),
+                    port: parse_port(parts[1])?,
+                    username: Some(parts[2].to_string()),
+                    password: Some(parts[3].to_string()),
+                    shape: Shape::Url,
+                });
+            }
+        }
         let (username, password, hostport) = split_at_sign(rest)?;
         let (host, port) = split_host_port(hostport)?;
         return Ok(ParsedProxy { scheme, host, port, username, password, shape: Shape::Url });
@@ -162,7 +209,29 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
 
     if line.contains('@') {
         let (username, password, hostport) = split_at_sign(line)?;
-        let (host, port) = split_host_port(hostport)?;
+        let (host, port) = match split_host_port(hostport) {
+            Ok(hp) => hp,
+            Err(e) => {
+                // `host:port@user:pass`: what follows the @ is not a
+                // host:port, and what precedes it is. One reading, so it is
+                // taken, and the shape says which.
+                let Some((front, back)) = line.split_once('@') else { return Err(e) };
+                let (Ok((host, port)), Some((u, p))) = (split_host_port(front), back.split_once(':')) else {
+                    return Err(e);
+                };
+                if u.is_empty() {
+                    return Err(e);
+                }
+                return Ok(ParsedProxy {
+                    scheme: "http".into(),
+                    host,
+                    port,
+                    username: Some(u.to_string()),
+                    password: Some(p.to_string()),
+                    shape: Shape::HostPortAtUserPass,
+                });
+            }
+        };
         return Ok(ParsedProxy {
             // No scheme means HTTP. Not a guess: every supplier that omits the
             // scheme is selling an HTTP proxy, and a SOCKS one is always
@@ -197,11 +266,16 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
             // essentially every supplier, and user:pass:host:port for a few.
             // Both readings can parse.
             //
-            // The rule: field 2 must be a port. If it is not, but field 4 is,
-            // the line is the other order and is REFUSED rather than
-            // reinterpreted — because a line that needs reinterpreting is a
-            // line the operator should look at, and a wrong exit is not
-            // something to be clever about.
+            // The rule: when field 2 is a port the line is host:port:user:pass,
+            // whatever field 4 is. When it is not, the line cannot be read that
+            // way at all, and if field 4 is a port and field 3 looks like an
+            // address it is user:pass:host:port -- the only reading it has, so
+            // nothing is guessed, and the shape is shown back before saving.
+            // This used to be refused, with a sentence asking for the line to
+            // be rewritten; a tester's supplier hands out exactly this order
+            // (12.10.2026). Field 3 has to look like an address (a dot, or
+            // localhost), so `bob:s3cret:alice:8080` is still refused rather
+            // than sent to a host called alice.
             let port = parts[1].parse::<u16>().ok();
             let tail_port = parts[3].parse::<u16>().ok();
             match (port, tail_port) {
@@ -212,6 +286,14 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
                     username: Some(parts[2].clone()),
                     password: Some(parts[3].clone()),
                     shape: Shape::HostPortUserPass,
+                }),
+                (_, Some(tp)) if tp != 0 && looks_like_host(&parts[2]) => Ok(ParsedProxy {
+                    scheme: "http".into(),
+                    host: parts[2].clone(),
+                    port: tp,
+                    username: Some(parts[0].clone()),
+                    password: Some(parts[1].clone()),
+                    shape: Shape::UserPassHostPort,
                 }),
                 (_, Some(_)) => Err(err(
                     "reversed",
@@ -238,6 +320,13 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
             ),
         )),
     }
+}
+
+/// An IPv4 address or a domain name, for telling a host from a username.
+fn looks_like_host(s: &str) -> bool {
+    !s.is_empty()
+        && (s.eq_ignore_ascii_case("localhost")
+            || (s.contains('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')))
 }
 
 fn normalise_scheme(scheme: &str) -> Result<String, ParseError> {
@@ -402,16 +491,47 @@ mod tests {
     }
 
     #[test]
-    fn a_reversed_line_is_refused_rather_than_reinterpreted() {
-        // user:pass:host:port. Field 2 is not a port, field 4 is. Reading it
-        // the other way round would send the account's traffic to a host called
-        // "bob" — or, worse, to a real host that happens to share the name.
-        let e = parse_line("bob:s3cret:1.2.3.4:8080").unwrap_err();
+    fn a_reversed_line_is_read_only_when_it_has_no_other_reading() {
+        // user:pass:host:port. Field 2 is not a port, so host:port:user:pass is
+        // impossible, and field 3 is an address: one reading, taken and shown.
+        let p = ok("bob:s3cret:1.2.3.4:8080");
+        assert_eq!((p.host.as_str(), p.port), ("1.2.3.4", 8080));
+        assert_eq!((p.username.as_deref(), p.password.as_deref()), (Some("bob"), Some("s3cret")));
+        assert_eq!(p.shape, Shape::UserPassHostPort);
+        assert_eq!(ok("c8734fb39d93614be1b0:pw:gate.example.net:10000").host, "gate.example.net");
+
+        // Field 3 is no address: refused, rather than a host called "alice".
+        let e = parse_line("bob:s3cret:alice:8080").unwrap_err();
         assert!(e.to_string().contains("user:pass:host:port"), "{e}");
 
-        // And the same line written the way Fury reads it does parse, so the
-        // error above is actionable rather than a dead end.
-        assert_eq!(ok("1.2.3.4:8080:bob:s3cret").port, 8080);
+        // Both readings possible: host:port:user:pass, as before.
+        let p = ok("1.2.3.4:8080:bob:9000");
+        assert_eq!((p.host.as_str(), p.port, p.shape), ("1.2.3.4", 8080, Shape::HostPortUserPass));
+    }
+
+    #[test]
+    fn the_other_shapes_suppliers_hand_out() {
+        let want = |l: &str, shape: Shape| {
+            let p = ok(l);
+            assert_eq!((p.host.as_str(), p.port), ("148.251.5.30", 10000), "{l}");
+            assert_eq!((p.username.as_deref(), p.password.as_deref()), (Some("u1"), Some("p:w")), "{l}");
+            assert_eq!(p.shape, shape, "{l}");
+            p
+        };
+        assert_eq!(want("socks5://148.251.5.30:10000:u1:p:w", Shape::Url).scheme, "socks5");
+        want("148.251.5.30:10000@u1:p:w", Shape::HostPortAtUserPass);
+        let want_plain = |l: &str| {
+            let p = ok(l);
+            assert_eq!((p.host.as_str(), p.port, p.username.as_deref(), p.password.as_deref()),
+                       ("148.251.5.30", 10000, Some("u1"), Some("pw")), "{l}");
+        };
+        want_plain("148.251.5.30:10000 u1 pw");
+        want_plain("148.251.5.30 10000 u1 pw");
+        want_plain("148.251.5.30\t10000\tu1\tpw");
+        want_plain("148.251.5.30:10000;u1;pw");
+        want_plain("148.251.5.30:10000|u1|pw");
+        // A space inside a password, in a shape that parses as it is, is kept.
+        assert_eq!(ok("148.251.5.30:10000:u1:p w").password.as_deref(), Some("p w"));
     }
 
     #[test]
