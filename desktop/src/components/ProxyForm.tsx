@@ -41,6 +41,7 @@ export function ProxyForm({
   const [check, setCheck] = useState<{
     ok: boolean; error?: string; ip?: string; country?: string;
     city?: string; timezone?: string; ms?: number; suggested_kind?: string | null;
+    error_code?: string | null;
   } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -128,7 +129,7 @@ export function ProxyForm({
                 <div className={check.ok ? "verdict good" : "verdict bad"} style={{ marginTop: "var(--s-2)" }}>
                   {check.ok
                     ? [check.ip, check.country, check.city, check.timezone].filter(Boolean).join(" · ")
-                    : check.error}
+                    : say({ code: check.error_code ? `pxc.${check.error_code}` : null, message: check.error })}
                 </div>
               )}
               {/* A provider hands out `host:port:user:pass`, which says nothing

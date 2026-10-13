@@ -190,7 +190,7 @@ export function ProfileDialog({
   const [pxChecker, setPxChecker] = useState("");
   const [pxCheck, setPxCheck] = useState<{
     ok: boolean; error?: string; ip?: string; country?: string;
-    city?: string; timezone?: string; ms?: number;
+    city?: string; timezone?: string; ms?: number; error_code?: string | null;
   } | null>(null);
 
   const [name, setName] = useState(editing?.name ?? "");
@@ -672,7 +672,7 @@ export function ProfileDialog({
                               ? [pxCheck.ip, pxCheck.country, pxCheck.city, pxCheck.timezone]
                                   .filter(Boolean)
                                   .join(" · ")
-                              : pxCheck.error}
+                              : say({ code: pxCheck.error_code ? `pxc.${pxCheck.error_code}` : null, message: pxCheck.error })}
                           </div>
                         )}
                         {/* The exit's zone is what the profile has to agree

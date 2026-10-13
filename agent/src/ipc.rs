@@ -78,6 +78,42 @@ fn refusal(id: &str, e: &anyhow::Error) -> serde_json::Value {
     serde_json::json!({ "id": id, "reason": e.to_string(), "code": e.downcast_ref::<Coded>().map(|c| c.code) })
 }
 
+/// Why a proxy check failed, as (code, sentence).
+///
+/// reqwest calls a refused SOCKS login, a SOCKS server that will not take a
+/// login at all, and a port nothing listens on all `is_connect`, and the check
+/// said "Could not connect to the proxy." for every one of them. A tester with
+/// a working-looking socks5 line got that and nothing to act on (12.10.2026).
+/// The cause is at the bottom of the error's source chain, measured against a
+/// fake SOCKS5 server: "credentials not accepted", "server does not support
+/// user/pass authentication", "failed to create underlying connection"; an
+/// HTTP proxy that refuses says "tunnel error: unsuccessful".
+fn check_failure(e: &reqwest::Error) -> (&'static str, String) {
+    let mut chain = vec![e.to_string()];
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        chain.push(s.to_string());
+        src = s.source();
+    }
+    let all = chain.join(" | ").to_ascii_lowercase();
+    let cause = chain.last().cloned().unwrap_or_default();
+    if e.is_timeout() {
+        ("timeout", "The proxy did not answer in time.".into())
+    } else if all.contains("credentials not accepted") {
+        ("socksAuth", format!("The proxy refused the login and password ({cause})."))
+    } else if all.contains("does not support user/pass") || all.contains("no acceptable auth") {
+        ("socksNoLogin", format!("The proxy does not accept a login and password; it may allow this computer's IP address instead ({cause})."))
+    } else if all.contains("underlying connection") || all.contains("connection refused") {
+        ("unreachable", format!("Nothing answers at this address and port ({cause})."))
+    } else if all.contains("tunnel error") {
+        ("tunnel", format!("The proxy answered but refused to connect onward ({cause})."))
+    } else if e.is_connect() {
+        ("connect", format!("Could not connect to the proxy ({cause})."))
+    } else {
+        ("other", format!("The check failed: {cause}"))
+    }
+}
+
 /// A profile that is open right now.
 struct Running {
     child: std::process::Child,
@@ -1161,15 +1197,13 @@ impl Agent {
                         if let Some(kind) = suggested {
                             tracing::info!(kind, "the proxy answers on another protocol");
                         }
+                        let (code, error) = check_failure(&e);
                         return Ok(json!({
                             "ok": false,
-                            "error": if e.is_timeout() {
-                                "The proxy did not answer in time.".to_string()
-                            } else if e.is_connect() {
-                                "Could not connect to the proxy.".to_string()
-                            } else {
-                                format!("The check failed: {e}")
-                            },
+                            "error": error,
+                            // For the interface's own sentence; `error` stays
+                            // the fallback, and the log.
+                            "error_code": code,
                             // A protocol this address does answer on. The
                             // interface offers it as a button; absent when the
                             // other family is no better.
