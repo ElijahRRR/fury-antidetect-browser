@@ -732,9 +732,27 @@ function CaptureMachine() {
             style={{ width: "100%", fontFamily: "var(--mono)", fontSize: 11, marginTop: "var(--s-2)" }}
           />
           <p className="hint">{t("cap.inFile")}</p>
+          {/* "Use on this computer" first and primary: it is what someone who
+              asked for a snapshot of their machine wants, and it makes the
+              machine appear in the list. Saving to Downloads only writes a
+              file for the catalogue, and as the primary button it was the one
+              pressed, after which the machine "did not appear anywhere"
+              (tester, 13.10.2026). */}
           <div className="row" style={{ marginTop: "var(--s-2)" }}>
             <button
               className="primary"
+              disabled={busy || result.problems.length > 0}
+              onClick={async () => {
+                try {
+                  setUsedHere(await api.usePersonaHere(result.persona));
+                } catch (e) {
+                  setError(say(e));
+                }
+              }}
+            >
+              {t("cap.useHere")}
+            </button>
+            <button
               disabled={busy}
               onClick={async () => {
                 try {
@@ -746,20 +764,8 @@ function CaptureMachine() {
             >
               {t("cap.save")}
             </button>
-            <button
-              disabled={busy || result.problems.length > 0}
-              title={result.problems.length > 0 ? t("cap.useHereRefused") : undefined}
-              onClick={async () => {
-                try {
-                  setUsedHere(await api.usePersonaHere(result.persona));
-                } catch (e) {
-                  setError(say(e));
-                }
-              }}
-            >
-              {t("cap.useHere")}
-            </button>
           </div>
+          {result.problems.length > 0 && <p className="hint">{t("cap.useHereRefused")}</p>}
           {usedHere && <p className="hint">{t("cap.usedHere", { id: usedHere })}</p>}
           {saved && (
             <p className="hint">
