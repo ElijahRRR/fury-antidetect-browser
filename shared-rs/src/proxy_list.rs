@@ -125,6 +125,21 @@ pub fn parse_line(line: &str) -> Result<ParsedProxy, ParseError> {
     if strict.is_ok() {
         return strict;
     }
+    // The type as a word in front: `socks5 ip:port:user:pass`,
+    // `socks5:ip:port:user:pass`. The word becomes the scheme, as if the line
+    // had said `socks5://`. Before, the first was read with a host of
+    // "socks5 1.2.3.4" and the second was refused (13.10.2026).
+    if let Some((head, rest)) = line.trim().split_once([' ', '\t', ':']) {
+        if !rest.starts_with("//") {
+            if let (Ok(scheme), Ok(mut p)) = (normalise_scheme(head), parse_line(rest)) {
+                if p.shape != Shape::Url {
+                    p.scheme = scheme;
+                    p.shape = Shape::Url;
+                    return Ok(p);
+                }
+            }
+        }
+    }
     // Other separators between the fields: `ip:port user pass`, `ip port user
     // pass`, `ip:port;user;pass`, `ip:port|user|pass`, tab-separated columns
     // copied out of a spreadsheet. Tried only after the line failed as it was,
@@ -207,6 +222,28 @@ fn parse_strict(line: &str) -> Result<ParsedProxy, ParseError> {
         return Ok(ParsedProxy { scheme, host, port, username, password, shape: Shape::Url });
     }
 
+    // `host:port:user:p@ss`: the supplier shape with an @ in the password,
+    // which the @ form below would cut in the wrong place. Only when field 1
+    // is an address, field 2 a port, and the @ is in the password.
+    let parts: Vec<&str> = line.splitn(4, ':').collect();
+    if line.contains('@')
+        && parts.len() == 4
+        && looks_like_host(parts[0])
+        && parts[1].parse::<u16>().is_ok_and(|p| p != 0)
+        && !parts[2].is_empty()
+        && !parts[2].contains('@')
+        && parts[3].contains('@')
+    {
+        return Ok(ParsedProxy {
+            scheme: "http".into(),
+            host: parts[0].to_string(),
+            port: parse_port(parts[1])?,
+            username: Some(parts[2].to_string()),
+            password: Some(parts[3].to_string()),
+            shape: Shape::HostPortUserPass,
+        });
+    }
+
     if line.contains('@') {
         let (username, password, hostport) = split_at_sign(line)?;
         let (host, port) = match split_host_port(hostport) {
@@ -249,6 +286,14 @@ fn parse_strict(line: &str) -> Result<ParsedProxy, ParseError> {
     // is also the only way it is unambiguous — `::1:8080` has no reading a
     // machine can be sure of, and neither does a person.
     let parts = split_colons(line)?;
+    // No host has a space in it. Taking one anyway turned `socks5 1.2.3.4:1080`
+    // into a host called "socks5 1.2.3.4"; refused here, the line goes on to
+    // the readings in parse_line.
+    // A password may have one; the host is field 1, or field 3 when the line
+    // is user:pass:host:port, and neither reading may take a spaced host.
+    if parts.first().is_some_and(|h| h.contains(char::is_whitespace)) {
+        return Err(err("spaceInHost", format!("{:?} has a space in it", parts[0])));
+    }
     match parts.len() {
         2 => {
             let (host, port) = (parts[0].clone(), parse_port(&parts[1])?);
@@ -415,6 +460,38 @@ mod tests {
 
     fn ok(line: &str) -> ParsedProxy {
         parse_line(line).unwrap_or_else(|e| panic!("{line:?} should parse: {e}"))
+    }
+
+    #[test]
+    fn the_type_as_a_word_in_front_is_the_scheme() {
+        for line in ["socks5 1.2.3.4:1080:user:pass", "socks5:1.2.3.4:1080:user:pass", "SOCKS5\t1.2.3.4 1080 user pass"] {
+            let p = ok(line);
+            assert_eq!(
+                (p.scheme.as_str(), p.host.as_str(), p.port, p.username.as_deref(), p.password.as_deref(), p.shape),
+                ("socks5", "1.2.3.4", 1080, Some("user"), Some("pass"), Shape::Url),
+                "{line}"
+            );
+        }
+        let p = ok("http 1.2.3.4:8080");
+        assert_eq!((p.scheme.as_str(), p.host.as_str(), p.port), ("http", "1.2.3.4", 8080));
+    }
+
+    #[test]
+    fn an_at_sign_in_the_password_of_the_supplier_shape() {
+        let p = ok("proxy.example.com:8000:user-zone-res:p@ss");
+        assert_eq!(
+            (p.host.as_str(), p.port, p.username.as_deref(), p.password.as_deref(), p.shape),
+            ("proxy.example.com", 8000, Some("user-zone-res"), Some("p@ss"), Shape::HostPortUserPass)
+        );
+        // The @ forms are untouched.
+        assert_eq!(ok("user:pass@1.2.3.4:8080").shape, Shape::AtSign);
+        assert_eq!(ok("1.2.3.4:8080@user:pass").shape, Shape::HostPortAtUserPass);
+    }
+
+    #[test]
+    fn a_host_never_has_a_space_in_it() {
+        // Neither reading is left, so it is refused rather than half-read.
+        assert!(parse_line("bad host:1080").is_err());
     }
 
     #[test]
