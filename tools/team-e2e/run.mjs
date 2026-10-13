@@ -249,7 +249,7 @@ async function launch(t, machine) {
       id: t.profileId,
       profile: {
         id: t.profileId, project_id: null, name: "e2e team profile", notes: "", tags: [],
-        persona_id: PERSONA, fp_seed: 12345,
+        persona_id: t.persona || PERSONA, fp_seed: 12345,
         proxy: {
           id: "e2e", name: "e2e", kind: "http", host: "127.0.0.1", port: t.proxyPort,
           username: null, password: null, last_country: null, last_ip: null,
@@ -397,6 +397,7 @@ async function setup() {
   return {
     tokens: { A: signup.token, B: second.token },
     projectId: project.id,
+    proxyServerId: proxy.id,
     profileId: profile.id,
     // Any 32 bytes: the server never sees it, and both machines must agree.
     profileKey: crypto.randomBytes(32).toString("hex"),
@@ -506,6 +507,37 @@ async function main() {
       () => false,
     );
     claim(free, "and its lock was released: B can take it straight away");
+  }
+
+  console.log("\n== 7. A machine captured by one member is the team's (server 0016)");
+  {
+    // A shipped persona under a new id stands in for a capture.
+    const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+    const persona = JSON.parse(fs.readFileSync(path.join(repo, "shared/personas/windows-11-rtx4060-1920x1080.json"), "utf8"));
+    persona.id = "e2e-captured-desk";
+    const refused = await api("POST", `/v1/projects/${t.projectId}/profiles`, t.tokens.A, {
+      name: "e2e on an unknown machine", persona_id: persona.id, fp_seed: "0123456789abcdef",
+      timezone: "Europe/Berlin", languages: ["en-US", "en"], proxy_id: t.proxyServerId,
+    }).then(() => false, () => true);
+    claim(refused, "a team profile on a machine the team does not have is refused");
+    await api("POST", "/v1/org/personas", t.tokens.A, { persona });
+    const list = await api("GET", "/v1/org/personas", t.tokens.B);
+    claim(list.some((r) => r.id === persona.id), "the other member's list has the machine");
+    const made = await api("POST", `/v1/projects/${t.projectId}/profiles`, t.tokens.A, {
+      name: "e2e on a captured machine", persona_id: persona.id, fp_seed: "0123456789abcdef",
+      timezone: "Europe/Berlin", languages: ["en-US", "en"], proxy_id: t.proxyServerId,
+    });
+    claim(Boolean(made.id), "and a team profile can be made on it");
+    // What the shell's sync_org_personas does on B before a launch.
+    fs.mkdirSync(path.join(MACHINES.B.home, "personas"), { recursive: true });
+    fs.writeFileSync(path.join(MACHINES.B.home, "personas", `${persona.id}.json`), JSON.stringify(list.find((r) => r.id === persona.id).persona));
+    const t7 = { ...t, profileId: made.id, persona: persona.id };
+    const run = await launch(t7, "B");
+    const pg = await run.cdp.page("about:blank");
+    const platform = await pg.eval("navigator.platform").catch(() => null);
+    await pg.close();
+    claim(platform === "Win32", `B opened it as that machine (navigator.platform ${platform})`);
+    await close(t7, run, "agent");
   }
 
   console.log(`\n${failed === 0 ? "PASS" : "FAIL"} -- ${passed} ok, ${failed} false`);

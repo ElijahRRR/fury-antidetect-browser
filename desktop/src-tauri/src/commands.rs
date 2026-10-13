@@ -251,6 +251,7 @@ impl AppState {
                     Some("step_up_required") => Some("err.stepUpRequired"),
                     Some("totp_enrolment_required") => Some("err.totpEnrolmentRequired"),
                     Some("proxy_not_yours") => Some("err.proxyNotYours"),
+                    Some("persona_not_yours") => Some("err.personaNotYours"),
                     _ => None,
                 }
             } else {
@@ -1456,6 +1457,10 @@ pub async fn launch(
         return Ok(serde_json::json!({ "launched": true, "pid": out.get("pid") }));
     }
 
+    // A profile on a machine a colleague captured: the persona has to be
+    // here before the agent looks it up by id.
+    sync_org_personas(&state).await;
+
     let body = serde_json::json!({
         "machine_id": state.machine_id(),
         "machine_name": settings::machine_name(),
@@ -1927,8 +1932,36 @@ pub async fn revoke_access(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn personas() -> R<serde_json::Value> {
+pub async fn personas(state: State<'_, AppState>) -> R<serde_json::Value> {
+    sync_org_personas(&state).await;
     Ok(crate::agent::call("personas.list", serde_json::json!({})).await?)
+}
+
+/// The organisation's machines (server 0016), written where the agent reads
+/// personas, so a team profile on a machine a colleague captured lists and
+/// opens here like a built-in one. Best effort: offline, or a server older
+/// than 0.3.7 (404), leaves the list as this computer has it.
+async fn sync_org_personas(state: &AppState) {
+    if mode_of(state) != "team" || state.session.token().is_none() {
+        return;
+    }
+    let rows: serde_json::Value = match state
+        .call(reqwest::Method::GET, "/v1/org/personas", Body::None, true)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e.message, "no organisation personas");
+            return;
+        }
+    };
+    for row in rows.as_array().into_iter().flatten() {
+        if let Some(persona) = row.get("persona") {
+            if let Err(e) = keep_persona_here(persona) {
+                tracing::warn!(error = %e.message, "could not keep an organisation persona");
+            }
+        }
+    }
 }
 
 /// What a profile will claim, before it exists. See the agent for why this is
@@ -3311,14 +3344,57 @@ fn persona_id(persona: &serde_json::Value) -> R<&str> {
 /// such a file with only a log line to say so.
 #[tauri::command]
 pub async fn use_persona_here(persona: serde_json::Value) -> R<String> {
-    let id = persona_id(&persona)?.to_string();
+    keep_persona_here(&persona)
+}
+
+/// Captured on this computer, shared with the organisation: kept here and
+/// sent to the server, which validates it again and refuses an id of the
+/// built-in catalogue. From then on a team profile can be made on it, and
+/// every member's list carries it (sync_org_personas).
+#[tauri::command]
+pub async fn share_persona_with_team(state: State<'_, AppState>, persona: serde_json::Value) -> R<String> {
+    // A captured id describes the machine (capture.rs suggest_id), so two
+    // colleagues on the same model get the same one, and the server keeps a
+    // colleague's machine from being replaced. The second becomes -2, as a
+    // capture already does against the built-in catalogue.
+    let base = persona_id(&persona)?.to_string();
+    let mut persona = persona;
+    for n in 1..=20 {
+        let id = if n == 1 { base.clone() } else { format!("{base}-{n}") };
+        persona["id"] = serde_json::json!(id);
+        let sent: R<serde_json::Value> = state
+            .call(
+                reqwest::Method::POST,
+                "/v1/org/personas",
+                Body::Json(serde_json::json!({ "persona": persona })),
+                true,
+            )
+            .await;
+        match sent {
+            Ok(_) => {
+                keep_persona_here(&persona)?;
+                return Ok(id);
+            }
+            Err(e) if e.code.as_deref() == Some("err.personaNotYours") => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(ApiErr::local("every id for this machine is taken in the team"))
+}
+
+/// Where the agent finds personas beside the built-in catalogue
+/// (agent/src/personas.rs), unchanged files left alone.
+fn keep_persona_here(persona: &serde_json::Value) -> R<String> {
+    let id = persona_id(persona)?.to_string();
     serde_json::from_value::<fury_shared::persona::Persona>(persona.clone())
         .map_err(|e| ApiErr::local(format!("this is not a persona the agent can read: {e}")))?;
     let dir = fury_platform::dirs::data_dir().join("personas");
     std::fs::create_dir_all(&dir).map_err(|e| ApiErr::local(format!("Could not create {}: {e}", dir.display())))?;
     let path = dir.join(format!("{id}.json"));
     let text = serde_json::to_string_pretty(&persona).map_err(|e| ApiErr::local(e.to_string()))?;
-    std::fs::write(&path, text).map_err(|e| ApiErr::local(format!("Could not write {}: {e}", path.display())))?;
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        std::fs::write(&path, text).map_err(|e| ApiErr::local(format!("Could not write {}: {e}", path.display())))?;
+    }
     Ok(id)
 }
 

@@ -44,6 +44,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/me/totp/verify", post(crate::security::totp_verify))
         .route("/v1/org/security", get(crate::security::get_policy).put(crate::security::put_policy))
         .route("/v1/org/domain-lists", get(list_domain_lists).post(upsert_domain_list))
+        .route("/v1/org/personas", get(list_org_personas).post(add_org_persona))
+        .route("/v1/org/personas/{id}", axum::routing::delete(delete_org_persona))
         .route("/v1/org/domain-lists/{id}", axum::routing::delete(delete_domain_list))
         .route("/v1/audit/logins", get(crate::security::list_logins))
         .route("/v1/sessions", get(crate::security::list_sessions))
@@ -1371,6 +1373,135 @@ struct DomainListUpsert {
 
 /// `GET /v1/org/domain-lists` — everyone in the organisation may read them:
 /// a member sees which lists apply to them. Writing needs manage_access.
+/// The machines a profile in this organisation may be: the catalogue the
+/// server was built with, then the organisation's own (0016), which may not
+/// reuse a built-in id. A stored persona that no longer parses -- a schema
+/// change since it was added -- is left out rather than failing every lookup.
+pub(crate) async fn org_catalogue(db: &mut sqlx::PgConnection, org_id: Uuid) -> ApiResult<Vec<fury_shared::Persona>> {
+    let mut catalogue = fury_shared::catalogue::all();
+    let rows: Vec<(String, serde_json::Value)> =
+        sqlx::query_as("SELECT id, persona FROM org_personas WHERE org_id = $1 ORDER BY id")
+            .bind(org_id)
+            .fetch_all(&mut *db)
+            .await?;
+    for (id, value) in rows {
+        match serde_json::from_value::<fury_shared::Persona>(value) {
+            Ok(p) if p.id == id && !catalogue.iter().any(|b| b.id == id) => catalogue.push(p),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(persona = %id, error = %e, "an organisation persona no longer parses"),
+        }
+    }
+    Ok(catalogue)
+}
+
+/// The organisation's machines, whole, for every member's shell to hand its
+/// agent: a team profile on one of them opens on any computer in the team.
+async fn list_org_personas(mut db: auth::Db) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    let rows: Vec<(String, serde_json::Value, Option<String>, String)> = sqlx::query_as(&format!(
+        "SELECT p.id, p.persona, u.email, {} FROM org_personas p \
+         LEFT JOIN users u ON u.id = p.created_by WHERE p.org_id = $1 ORDER BY p.id",
+        rfc3339("p.created_at")
+    ))
+    .bind(caller.org_id)
+    .fetch_all(db.as_mut())
+    .await?;
+    Ok(Json(json!(rows
+        .into_iter()
+        .map(|(id, persona, by, at)| json!({ "id": id, "persona": persona, "created_by": by, "created_at": at }))
+        .collect::<Vec<_>>())))
+}
+
+#[derive(Deserialize)]
+pub struct OrgPersonaRequest {
+    persona: serde_json::Value,
+}
+
+/// Add a captured machine to the organisation, or replace one of the same id.
+///
+/// Whoever may create profiles somewhere may add the machine to make them on;
+/// replacing one is for its author, an owner or an admin, because profiles of
+/// colleagues may already be on it. Validated with the agent's own rules, so
+/// what is stored is a machine that can exist.
+async fn add_org_persona(mut db: auth::Db, Json(req): Json<OrgPersonaRequest>) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    if !rbac_guard::holds_somewhere(db.as_mut(), caller.user_id, caller.org_id, caller.role, Perm::CreateProfile).await? {
+        return Err(ApiError::Denied(Perm::CreateProfile));
+    }
+    let persona: fury_shared::Persona = serde_json::from_value(req.persona.clone())
+        .map_err(|e| ApiError::BadRequest(format!("this is not a persona: {e}")))?;
+    let id = persona.id.clone();
+    if id.is_empty() || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err(ApiError::BadRequest("a persona id is letters, digits, - and _, up to 100".into()));
+    }
+    if fury_shared::catalogue::all().iter().any(|b| b.id == id) {
+        return Err(ApiError::BadRequest(format!("{id:?} is already in the built-in catalogue")));
+    }
+    if let Err(errs) = persona.validate() {
+        return Err(ApiError::BadRequest(format!(
+            "this machine could not exist: {}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+        )));
+    }
+    let existing: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT created_by FROM org_personas WHERE org_id = $1 AND id = $2")
+            .bind(caller.org_id)
+            .bind(&id)
+            .fetch_optional(db.as_mut())
+            .await?;
+    if let Some(author) = existing {
+        let mine = author == Some(caller.user_id);
+        if !mine && !fury_shared::rbac::has_implicit_project_access(caller.role) {
+            return Err(ApiError::Refused("persona_not_yours"));
+        }
+    }
+    sqlx::query(
+        "INSERT INTO org_personas (org_id, id, persona, created_by) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (org_id, id) DO UPDATE SET persona = EXCLUDED.persona, updated_at = now()",
+    )
+    .bind(caller.org_id)
+    .bind(&id)
+    .bind(&req.persona)
+    .bind(caller.user_id)
+    .execute(db.as_mut())
+    .await?;
+    audit(db.as_mut(), &caller, "persona.saved", None, json!({ "id": id })).await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// Remove one, if no profile is on it: a profile whose machine is gone would
+/// refuse to launch on every computer at once.
+async fn delete_org_persona(mut db: auth::Db, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    let author: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT created_by FROM org_personas WHERE org_id = $1 AND id = $2")
+            .bind(caller.org_id)
+            .bind(&id)
+            .fetch_optional(db.as_mut())
+            .await?;
+    let Some(author) = author else { return Err(ApiError::NotFound) };
+    if author != Some(caller.user_id) && !fury_shared::rbac::has_implicit_project_access(caller.role) {
+        return Err(ApiError::Refused("persona_not_yours"));
+    }
+    let used: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM profiles WHERE org_id = $1 AND persona_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(caller.org_id)
+    .bind(&id)
+    .fetch_one(db.as_mut())
+    .await?;
+    if used > 0 {
+        return Err(ApiError::Conflict(format!("{used} profile(s) are on this machine; move them to another first")));
+    }
+    sqlx::query("DELETE FROM org_personas WHERE org_id = $1 AND id = $2")
+        .bind(caller.org_id)
+        .bind(&id)
+        .execute(db.as_mut())
+        .await?;
+    audit(db.as_mut(), &caller, "persona.deleted", None, json!({ "id": id })).await?;
+    Ok(Json(json!({ "deleted": true })))
+}
+
 async fn list_domain_lists(mut db: auth::Db) -> ApiResult<Json<serde_json::Value>> {
     let caller = db.caller;
     let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(&format!(
@@ -1917,7 +2048,7 @@ async fn create_profile(
     // was set to avoid.
     //
     // Stored as NULL and '{}' respectively, which is what launch_spec reads.
-    let catalogue = fury_shared::catalogue::all();
+    let catalogue = org_catalogue(db.as_mut(), caller.org_id).await?;
     let Some(persona) = catalogue.iter().find(|p| p.id == req.persona_id) else {
         return Err(ApiError::BadRequest(format!(
             "no persona called {:?} — the client and the server ship different catalogues",
@@ -2412,7 +2543,7 @@ async fn edit_profile(
         if !perms.has(Perm::EditFingerprint) {
             return Err(ApiError::Denied(Perm::EditFingerprint));
         }
-        let catalogue = fury_shared::catalogue::all();
+        let catalogue = org_catalogue(db.as_mut(), caller.org_id).await?;
         let persona = catalogue.iter().find(|p| p.id == persona_id).ok_or_else(|| {
             ApiError::BadRequest(format!(
                 "this profile's machine {persona_id:?} is not in this server's catalogue"

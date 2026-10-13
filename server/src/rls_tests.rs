@@ -841,3 +841,35 @@ db_test!(edit_proxy_on_a_project_adds_proxies_and_changes_only_ones_own, c, {
     let org_b = uuid::Uuid::parse_str(ORG_B).unwrap();
     assert_eq!(may_change_proxy(&mut c, owner, org_b, OrgRole::Owner, members).await.unwrap(), None);
 });
+
+// ---------------------------------------------------------------------------
+// 0016: an organisation's own machines join its catalogue, and only its own
+// ---------------------------------------------------------------------------
+
+db_test!(an_organisations_machine_is_in_its_catalogue_and_nobody_elses, c, {
+    let base = fury_shared::catalogue::all().into_iter().find(|p| p.id.starts_with("windows")).unwrap();
+    let mut mine = serde_json::to_value(&base).unwrap();
+    mine["id"] = serde_json::json!("captured-desk-1280x720");
+    bind(&mut c, USER_A).await;
+    sqlx::query("INSERT INTO org_personas (org_id, id, persona, created_by) VALUES ($1::uuid, $2, $3, $4::uuid)")
+        .bind(ORG_A).bind("captured-desk-1280x720").bind(&mine).bind(USER_A)
+        .execute(&mut c).await.expect("store the machine");
+    // A row whose id disagrees with its persona is not trusted.
+    sqlx::query("INSERT INTO org_personas (org_id, id, persona) VALUES ($1::uuid, 'liar', $2)")
+        .bind(ORG_A).bind(&mine)
+        .execute(&mut c).await.unwrap();
+
+    let org_a = uuid::Uuid::parse_str(ORG_A).unwrap();
+    let a = crate::api::org_catalogue(&mut c, org_a).await.unwrap();
+    assert!(a.iter().any(|p| p.id == "captured-desk-1280x720"));
+    assert!(!a.iter().any(|p| p.id == "liar"));
+    assert_eq!(a.len(), fury_shared::catalogue::all().len() + 1);
+
+    // B is bound now: row-level security hides A's machines from B's queries,
+    // whichever organisation is asked about.
+    bind(&mut c, USER_B).await;
+    let b = crate::api::org_catalogue(&mut c, uuid::Uuid::parse_str(ORG_B).unwrap()).await.unwrap();
+    assert!(!b.iter().any(|p| p.id == "captured-desk-1280x720"));
+    let peek = crate::api::org_catalogue(&mut c, org_a).await.unwrap();
+    assert!(!peek.iter().any(|p| p.id == "captured-desk-1280x720"), "RLS hides another org's machines");
+});

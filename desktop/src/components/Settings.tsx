@@ -259,7 +259,7 @@ export function Settings({
 
               <DomainLists />
 
-              <CaptureMachine />
+              <CaptureMachine team={shell.mode !== "local" && shell.signed_in} />
 
               <div className="settingsGroup">
                 <h2>{t("set.thisMachine")}</h2>
@@ -675,12 +675,13 @@ function DomainLists() {
  *  fingerprint — publishing it publishes how this computer looks to any site.
  *  For the laptop that runs live accounts that is a bad idea, and the screen
  *  says so before the button does anything. */
-function CaptureMachine() {
+function CaptureMachine({ team }: { team: boolean }) {
   const { t, say } = useI18n();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ persona: Record<string, unknown> & { id: string }; problems: string[]; browser: string } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [usedHere, setUsedHere] = useState<string | null>(null);
+  const [shared, setShared] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -752,6 +753,20 @@ function CaptureMachine() {
             >
               {t("cap.useHere")}
             </button>
+            {team && (
+              <button
+                disabled={busy || result.problems.length > 0}
+                onClick={async () => {
+                  try {
+                    setShared(await api.sharePersonaWithTeam(result.persona));
+                  } catch (e) {
+                    setError(say(e));
+                  }
+                }}
+              >
+                {t("cap.shareTeam")}
+              </button>
+            )}
             <button
               disabled={busy}
               onClick={async () => {
@@ -767,6 +782,7 @@ function CaptureMachine() {
           </div>
           {result.problems.length > 0 && <p className="hint">{t("cap.useHereRefused")}</p>}
           {usedHere && <p className="hint">{t("cap.usedHere", { id: usedHere })}</p>}
+          {shared && <p className="hint">{t("cap.shared", { id: shared })}</p>}
           {saved && (
             <p className="hint">
               {t("cap.saved", { path: saved })} {t("cap.next")}{" "}

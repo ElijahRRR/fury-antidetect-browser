@@ -133,6 +133,18 @@ pub async fn may_add_proxies(
     org_id: Uuid,
     role: OrgRole,
 ) -> Result<bool, GuardError> {
+    holds_somewhere(db, user_id, org_id, role, Perm::EditProxy).await
+}
+
+/// Whether some live project grant gives `perm`, or the role reaches every
+/// project. For the organisation's own lists, which belong to no project.
+pub async fn holds_somewhere(
+    db: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    org_id: Uuid,
+    role: OrgRole,
+    perm: Perm,
+) -> Result<bool, GuardError> {
     if fury_shared::rbac::has_implicit_project_access(role) {
         return Ok(true);
     }
@@ -151,7 +163,7 @@ pub async fn may_add_proxies(
     .await?;
     Ok(grants
         .into_iter()
-        .any(|bits| effective(role, Some(PermSet(bits))).has(Perm::EditProxy)))
+        .any(|bits| effective(role, Some(PermSet(bits))).has(perm)))
 }
 
 /// What `may_change_proxy` found.
