@@ -52,7 +52,12 @@ export function ProxyForm({
    *  change of protocol in the same click: setKind lands on the next render and
    *  the request would otherwise go out under the kind that just failed. */
   const url = (k = kind) => {
-    const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : "";
+    // As typed, not percent-encoded: the agent reads the URL with its own
+    // parser (main.rs parse_upstream), the one launch uses with stored
+    // proxies, and that parser does not decode. Since the check went through
+    // it (d5e7003), a login like "id__cr.us;sessttl.60" reached the proxy
+    // as "id__cr.us%3Bsessttl.60" and was turned away (13.10.2026).
+    const auth = user ? `${user}:${pass}@` : "";
     return `${k}://${auth}${host.trim()}:${Number(port)}`;
   };
 

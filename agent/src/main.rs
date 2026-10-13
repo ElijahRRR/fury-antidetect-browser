@@ -1005,6 +1005,21 @@ mod tests {
     }
 
     #[test]
+    fn a_login_is_taken_as_written() {
+        // A supplier's session parameters ride in the login. The parser does
+        // not percent-decode, so the form must not encode: "%3B" here was a
+        // login the proxy did not know (13.10.2026).
+        let u = parse_upstream("socks5://c8734fb39d__cr.us;sessttl.60:pw@gw.psbproxy.io:10000").unwrap();
+        match u {
+            Upstream::Socks5 { host, port, auth } => {
+                assert_eq!((host.as_str(), port), ("gw.psbproxy.io", 10000));
+                assert_eq!(auth.unwrap().username, "c8734fb39d__cr.us;sessttl.60");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn passwords_may_contain_at_signs() {
         // rsplit_once('@') matters: 'p@ss' would otherwise split in the wrong place.
         let u = parse_upstream("http://bob:p@ss@proxy.example:8080").unwrap();

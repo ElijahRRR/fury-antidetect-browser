@@ -29,7 +29,8 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
   /** The URL the single-proxy form would build. In team mode the password is
    *  not here, and check_proxy fetches it by id instead. */
   const urlOf = (p: LocalProxy) => {
-    const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(p.password ?? "")}@` : "";
+    // As typed, not percent-encoded: see ProxyForm.
+    const auth = p.username ? `${p.username}:${p.password ?? ""}@` : "";
     return `${p.kind}://${auth}${p.host}:${p.port}`;
   };
 
