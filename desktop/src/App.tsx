@@ -2,7 +2,7 @@
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
 import { useCallback, useEffect, useState } from "react";
-import { useI18n } from "./i18n";
+import { useI18n, type Key } from "./i18n";
 import { api, ApiError, type LocalProxy, type Me, type MirrorStatus, type Profile, type Project, type Shell, type UpdateProgress, type WarmProgress } from "./api";
 import { Login } from "./components/Login";
 import { ProfileDialog } from "./components/ProfileDialog";
@@ -31,6 +31,18 @@ import { Icon, IconButton } from "./components/Icon";
 import { useTheme } from "./theme";
 import { exitSharing } from "./consistency";
 import { isSuggested } from "./status";
+
+/** What the browser build the agent asks for changes, for the bar that offers
+ *  it. One sentence for every build told a Mac being offered 0.3.8 about a
+ *  taskbar icon, canvas fixes and "about 150 MB" (13.10.2026). A build with
+ *  no line of its own gets a plain one; the size is shown by the download. */
+const CORE_WHAT: Record<string, Key> = {
+  "0.3.8": "app.coreWhat038",
+  "0.3.7": "app.coreWhat037",
+};
+function coreWhat(need: string): Key {
+  return CORE_WHAT[need] ?? "app.coreWhatOther";
+}
 
 export function App() {
   // The shell answers what the interface cannot know on its own: whether this
@@ -980,7 +992,7 @@ export function App() {
                         total: Math.round(dl.total / 1e6).toString(),
                       })
                     : t("app.coreStarting")
-                  : (dl?.error ?? t("app.coreStaleHow"))}
+                  : (dl?.error ?? t("app.coreStaleHow", { what: t(coreWhat(shell.core_stale.need)) }))}
               </div>
               {dl?.running && dl.total > 0 && (
                 <progress
