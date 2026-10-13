@@ -2,7 +2,7 @@
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
 import { useEffect, useState } from "react";
-import { api, type DomainList, type Shell } from "../api";
+import { api, type DomainList, type KeptPersona, type Shell } from "../api";
 import { SecondFactor } from "./SecondFactor";
 import { languages, useI18n, type Language } from "../i18n";
 import { type Theme, themes, useTheme } from "../theme";
@@ -683,6 +683,25 @@ function CaptureMachine({ team }: { team: boolean }) {
   const [usedHere, setUsedHere] = useState<string | null>(null);
   const [shared, setShared] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Machines already kept here, each addable to the team. "Add to the team"
+  // was only on the result of a fresh capture, and a tester whose machine was
+  // already in use looked for it and found it nowhere (13.10.2026).
+  const [kept, setKept] = useState<KeptPersona[]>([]);
+  const [keptShared, setKeptShared] = useState<Record<string, string>>({});
+  // Its own error line, under the list: the group's is under the capture
+  // button, a screen away from the row that failed.
+  const [keptError, setKeptError] = useState<string | null>(null);
+  const reloadKept = async () => {
+    try {
+      setKept(await api.keptPersonas());
+    } catch {
+      setKept([]);
+    }
+  };
+  useEffect(() => {
+    void reloadKept();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team]);
 
   return (
     <div className="settingsGroup">
@@ -746,6 +765,7 @@ function CaptureMachine({ team }: { team: boolean }) {
               onClick={async () => {
                 try {
                   setUsedHere(await api.usePersonaHere(result.persona));
+                  void reloadKept();
                 } catch (e) {
                   setError(say(e));
                 }
@@ -759,6 +779,7 @@ function CaptureMachine({ team }: { team: boolean }) {
                 onClick={async () => {
                   try {
                     setShared(await api.sharePersonaWithTeam(result.persona));
+                    void reloadKept();
                   } catch (e) {
                     setError(say(e));
                   }
@@ -781,7 +802,7 @@ function CaptureMachine({ team }: { team: boolean }) {
             </button>
           </div>
           {result.problems.length > 0 && <p className="hint">{t("cap.useHereRefused")}</p>}
-          {usedHere && <p className="hint">{t("cap.usedHere", { id: usedHere })}</p>}
+          {usedHere && <p className="hint">{t(team ? "cap.usedHereTeam" : "cap.usedHere", { id: usedHere })}</p>}
           {shared && <p className="hint">{t("cap.shared", { id: shared })}</p>}
           {saved && (
             <p className="hint">
@@ -801,6 +822,59 @@ function CaptureMachine({ team }: { team: boolean }) {
           )}
         </div>
       )}
+      {kept.length > 0 && (
+        <div style={{ marginTop: "var(--s-4)" }}>
+          <h3>{t("cap.keptTitle")}</h3>
+          <p className="hint">{team ? t("cap.keptHintTeam") : t("cap.keptHint")}</p>
+          {kept.map((k) => (
+            <div key={k.id} style={{ marginTop: "var(--s-2)" }}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span>
+                  <strong>{k.id}</strong>
+                  <span className="muted small"> · {describeMachine(k.persona)}</span>
+                </span>
+                {team &&
+                  (k.in_team ? (
+                    <span className="muted small" style={{ whiteSpace: "nowrap" }}>{t("cap.inTeam")}</span>
+                  ) : (
+                    <button
+                      style={{ flexShrink: 0 }}
+                      onClick={async () => {
+                        setKeptError(null);
+                        try {
+                          const id = await api.sharePersonaWithTeam(k.persona);
+                          setKeptShared((m) => ({ ...m, [k.id]: id }));
+                          void reloadKept();
+                        } catch (e) {
+                          setKeptError(say(e));
+                        }
+                      }}
+                    >
+                      {t("cap.shareTeam")}
+                    </button>
+                  ))}
+              </div>
+              {keptShared[k.id] && <p className="hint">{t("cap.shared", { id: keptShared[k.id] })}</p>}
+            </div>
+          ))}
+          {keptError && <p className="error">{keptError}</p>}
+        </div>
+      )}
     </div>
   );
+}
+
+/** "macOS 15 · Apple M2 · 1512×982", from a persona file's own fields. */
+function describeMachine(p: Record<string, unknown>): string {
+  const o = (v: unknown) => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+  const os = o(p.os);
+  const gpu = o(p.gpu);
+  const screen = o(p.screen);
+  return [
+    [os.name, os.version].filter(Boolean).join(" "),
+    gpu.webgl_renderer,
+    screen.width && screen.height ? `${screen.width}×${screen.height}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }

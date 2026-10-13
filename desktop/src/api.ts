@@ -339,6 +339,14 @@ export interface Persona {
   source: string | null;
 }
 
+/** A machine in this computer's personas folder: captured here, or an
+ *  organisation machine the app fetched. */
+export interface KeptPersona {
+  id: string;
+  persona: Record<string, unknown> & { id: string };
+  in_team: boolean | null;
+}
+
 export interface Preview {
   user_agent: string;
   platform: string;
@@ -1098,6 +1106,9 @@ export const api = {
   usePersonaHere: (persona: unknown): Promise<string> => cmd<string>("use_persona_here", { persona }),
   /** Kept here and added to the organisation's machines on the server. */
   sharePersonaWithTeam: (persona: unknown): Promise<string> => cmd<string>("share_persona_with_team", { persona }),
+  /** Machines kept on this computer; `in_team` null outside team mode or when
+   *  the server cannot say. */
+  keptPersonas: (): Promise<KeptPersona[]> => cmd<KeptPersona[]>("kept_personas"),
 
   // ---- domain lists ------------------------------------------------------
 

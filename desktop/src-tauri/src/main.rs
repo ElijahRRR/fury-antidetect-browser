@@ -208,6 +208,7 @@ fn main() {
             commands::save_persona_file,
             commands::use_persona_here,
             commands::share_persona_with_team,
+            commands::kept_personas,
             commands::blocklists,
             commands::read_blocklist,
             commands::save_blocklist,

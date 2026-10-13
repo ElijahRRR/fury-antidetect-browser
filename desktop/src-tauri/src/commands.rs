@@ -3382,6 +3382,51 @@ pub async fn share_persona_with_team(state: State<'_, AppState>, persona: serde_
     Err(ApiErr::local("every id for this machine is taken in the team"))
 }
 
+/// The machines kept on this computer, each with whether the organisation has
+/// it, so one captured earlier can still be added to the team. "Add to the
+/// team" used to exist only on the result of a fresh capture, and a tester
+/// whose machine was already in use here looked for it and found it nowhere
+/// (13.10.2026). `in_team` is null outside team mode, or when the server
+/// cannot say (offline, older than 0.3.7).
+#[tauri::command]
+pub async fn kept_personas(state: State<'_, AppState>) -> R<serde_json::Value> {
+    let team: Option<std::collections::HashSet<String>> =
+        if mode_of(&state) == "team" && state.session.token().is_some() {
+            state
+                .call(reqwest::Method::GET, "/v1/org/personas", Body::None, true)
+                .await
+                .ok()
+                .map(|rows: serde_json::Value| {
+                    rows.as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                        .collect()
+                })
+        } else {
+            None
+        };
+    let dir = fury_platform::dirs::data_dir().join("personas");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let Some(persona) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        else {
+            continue;
+        };
+        let Ok(id) = persona_id(&persona).map(str::to_string) else { continue };
+        let in_team = team.as_ref().map(|ids| ids.contains(&id));
+        out.push(serde_json::json!({ "id": id, "persona": persona, "in_team": in_team }));
+    }
+    out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Ok(serde_json::Value::Array(out))
+}
+
 /// Where the agent finds personas beside the built-in catalogue
 /// (agent/src/personas.rs), unchanged files left alone.
 fn keep_persona_here(persona: &serde_json::Value) -> R<String> {
