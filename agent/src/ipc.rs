@@ -86,9 +86,9 @@ fn refusal(id: &str, e: &anyhow::Error) -> serde_json::Value {
 /// (12.10.2026). The check goes through the relay now (`relay::via`), whose
 /// error names the cause; this reads the relay's error when there is one and
 /// reqwest's when the proxy was fine and the request after it was not.
-async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: &reqwest::Error) -> (&'static str, String) {
+async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: Option<&reqwest::Error>) -> (&'static str, String) {
     use crate::relay::RelayError;
-    if e.is_timeout() {
+    if e.is_some_and(|e| e.is_timeout()) {
         return ("timeout", "The proxy did not answer in time.".into());
     }
     match crate::relay::explain(upstream.clone(), endpoint).await {
@@ -107,7 +107,10 @@ async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: &re
         Some(other) => return ("connect", format!("Could not connect to the proxy ({other}).")),
         None => {}
     }
-    reqwest_failure(e)
+    match e {
+        Some(e) => reqwest_failure(e),
+        None => ("other", "The check failed: the IP checker answered 502 Bad Gateway.".into()),
+    }
 }
 
 fn reqwest_failure(e: &reqwest::Error) -> (&'static str, String) {
@@ -1188,7 +1191,22 @@ impl Agent {
                 let via = crate::relay::via(upstream.clone(), std::time::Duration::from_secs(15)).await?;
 
                 let started = std::time::Instant::now();
-                let body: serde_json::Value = match via.client().get(&endpoint).send().await {
+                let sent = via.client().get(&endpoint).send().await;
+                let body: serde_json::Value = match sent {
+                    // The relay says an upstream failure with a 502. Over
+                    // https that is a failed CONNECT and an Err below; over a
+                    // plain http checker it is a response, and was taken for
+                    // a pass with no IP: a fake proxy that refused the login
+                    // "passed" (13.10.2026).
+                    Ok(res) if res.status() == reqwest::StatusCode::BAD_GATEWAY => {
+                        let (code, error) = check_failure(&upstream, &endpoint, None).await;
+                        return Ok(json!({
+                            "ok": false,
+                            "error": error,
+                            "error_code": code,
+                            "suggested_kind": serde_json::Value::Null,
+                        }));
+                    }
                     Ok(res) => res.json().await.unwrap_or(serde_json::Value::Null),
                     Err(e) => {
                         // Before reporting silence, find out whether the far
@@ -1206,7 +1224,7 @@ impl Agent {
                         if let Some(kind) = suggested {
                             tracing::info!(kind, "the proxy answers on another protocol");
                         }
-                        let (code, error) = check_failure(&upstream, &endpoint, &e).await;
+                        let (code, error) = check_failure(&upstream, &endpoint, Some(&e)).await;
                         return Ok(json!({
                             "ok": false,
                             "error": error,
