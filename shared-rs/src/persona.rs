@@ -112,6 +112,63 @@ pub struct PersonaOs {
     pub ch_bitness: String,
 }
 
+impl PersonaOs {
+    /// The version a person would name: "Windows 10", not "Windows 7.0.0".
+    ///
+    /// A capture used to store Client Hints' platformVersion as the version,
+    /// and on Windows that number is not the release: Windows 10 1809 reports
+    /// 7.0.0, 22H2 10.0.0, Windows 11 13.0.0 and up. A tester on Windows 10
+    /// saw his own machine listed as "Windows 7.0.0" (13.10.2026). Files kept
+    /// before the capture was fixed still carry it, so it is read here too.
+    pub fn display_version(&self) -> String {
+        if self.name == "Windows" && self.version.contains('.') {
+            if let Some(release) = windows_release(&self.version) {
+                return release.to_string();
+            }
+        }
+        self.version.clone()
+    }
+}
+
+/// The same number as a person knows it, for showing beside the raw value:
+/// "Windows 10 1809" for 7.0.0. From Microsoft's table ("Detect Windows 11
+/// ... using User-Agent Client Hints"); 8 is 1903 or 1909, 10 any of 2004 to
+/// 22H2, and Windows 11 releases are not told apart here.
+pub fn windows_release_name(platform_version: &str) -> Option<String> {
+    let release = windows_release(platform_version)?;
+    let major: u32 = platform_version.split('.').next()?.trim().parse().ok()?;
+    let build = match major {
+        1 => "1507",
+        2 => "1511",
+        3 => "1607",
+        4 => "1703",
+        5 => "1709",
+        6 => "1803",
+        7 => "1809",
+        8 => "1903/1909",
+        9 | 10 => "2004+",
+        _ => "",
+    };
+    Some(if build.is_empty() { format!("Windows {release}") } else { format!("Windows {release} {build}") })
+}
+
+/// Windows' Client Hints platformVersion to its release: 1.0.0-10.0.0 are
+/// Windows 10 builds, 13.0.0 and up Windows 11, 0.1-0.3 Windows 7, 8 and 8.1.
+/// None for anything else, so a caller keeps what it had.
+pub fn windows_release(platform_version: &str) -> Option<&'static str> {
+    let mut parts = platform_version.split('.');
+    let major: u32 = parts.next()?.trim().parse().ok()?;
+    let minor: u32 = parts.next().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
+    match (major, minor) {
+        (0, 1) => Some("7"),
+        (0, 2) => Some("8"),
+        (0, 3) => Some("8.1"),
+        (1..=10, _) => Some("10"),
+        (13.., _) => Some("11"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonaGpu {
     pub webgl_vendor: String,
@@ -947,6 +1004,24 @@ pub mod seed {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_is_named_by_its_release_not_its_client_hints_version() {
+        use super::windows_release as r;
+        // 7.0.0 is Windows 10 1809: the tester's machine, listed as Windows 7.
+        assert_eq!(r("7.0.0"), Some("10"));
+        assert_eq!(r("10.0.0"), Some("10"));
+        assert_eq!(r("1.0.0"), Some("10"));
+        assert_eq!(r("15.0.0"), Some("11"));
+        assert_eq!(r("19.0.0"), Some("11"));
+        assert_eq!(r("0.1.0"), Some("7"));
+        assert_eq!(r("0.3.0"), Some("8.1"));
+        assert_eq!(r("11.0.0"), None);
+        assert_eq!(r(""), None);
+        assert_eq!(super::windows_release_name("7.0.0").as_deref(), Some("Windows 10 1809"));
+        assert_eq!(super::windows_release_name("15.0.0").as_deref(), Some("Windows 11"));
+        assert_eq!(super::windows_release_name("15.0"), Some("Windows 11".into()));
+    }
+
     #[test]
     fn a_seed_survives_every_representation_it_passes_through() {
         // The one that matters: a seed with the top bit set. As an i64 it is

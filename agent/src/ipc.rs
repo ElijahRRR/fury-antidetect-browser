@@ -1809,6 +1809,26 @@ impl Agent {
                         .unwrap_or(serde_json::Value::Null)
                 };
 
+                // The raw value is what sites read and stays as it is; on
+                // Windows it is not the release (7.0.0 is Windows 10 1809),
+                // so the release is named beside it. "Windows 7.0.0" alone
+                // read as a bug (13.10.2026).
+                let client_hints = {
+                    let platform = get("clientHints.platform").as_str().unwrap_or("").to_string();
+                    let version = get("clientHints.platformVersion").as_str().unwrap_or("").to_string();
+                    let release = if platform == "Windows" {
+                        fury_shared::persona::windows_release_name(&version)
+                            .map(|r| format!(" ({r})"))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{platform} {version}{release} · {} · {}-bit",
+                        get("clientHints.architecture").as_str().unwrap_or(""),
+                        get("clientHints.bitness").as_str().unwrap_or("")
+                    )
+                };
                 Ok(json!({
                     "user_agent": get("navigator.userAgent"),
                     "platform": get("navigator.platform"),
@@ -1830,13 +1850,7 @@ impl Agent {
                     // reader concluded there were 10 things spoofed (docs/12,
                     // audit of 12.09.2026).
                     "chrome_version": get("clientHints.fullVersion"),
-                    "client_hints": format!(
-                        "{} {} · {} · {}-bit",
-                        get("clientHints.platform").as_str().unwrap_or(""),
-                        get("clientHints.platformVersion").as_str().unwrap_or(""),
-                        get("clientHints.architecture").as_str().unwrap_or(""),
-                        get("clientHints.bitness").as_str().unwrap_or("")
-                    ),
+                    "client_hints": client_hints,
                     "avail": format!(
                         "{}×{}",
                         get("screen.availWidth").as_i64().unwrap_or(0),

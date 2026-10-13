@@ -187,6 +187,14 @@ pub fn from_capture(dump: &Value, id: &str, weight: f64) -> Result<Value, String
     });
     let (arch_default, bitness_default) = if android { ("", "") } else { ("x86", "64") };
 
+    // The release, not platformVersion: on Windows that is 7.0.0 for a
+    // Windows 10 machine (see PersonaOs::display_version).
+    let platform_version = s(dump, "clientHints.platformVersion").unwrap_or_default();
+    let os_version = match crate::persona::windows_release(&platform_version) {
+        Some(release) if !mac && !android => release.to_string(),
+        _ => platform_version,
+    };
+
     let mut persona = json!({
         "id": id,
         "weight": weight,
@@ -194,7 +202,7 @@ pub fn from_capture(dump: &Value, id: &str, weight: f64) -> Result<Value, String
         "source": "capture",
         "os": {
             "name": if mac { "macOS" } else if android { "Android" } else { "Windows" },
-            "version": s(dump, "clientHints.platformVersion").unwrap_or_default(),
+            "version": os_version,
             "arch": if android { "arm64".to_string() } else { s(dump, "clientHints.architecture").unwrap_or_else(|| "x86".into()) },
             "user_agent_template": ua_template(&ua),
             "platform": platform,

@@ -871,10 +871,22 @@ function describeMachine(p: Record<string, unknown>): string {
   const gpu = o(p.gpu);
   const screen = o(p.screen);
   return [
-    [os.name, os.version].filter(Boolean).join(" "),
+    [os.name, os.name === "Windows" ? windowsRelease(String(os.version ?? "")) : os.version].filter(Boolean).join(" "),
     gpu.webgl_renderer,
     screen.width && screen.height ? `${screen.width}×${screen.height}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** A capture kept before 0.3.10 stores Client Hints' platformVersion as the
+ *  version, and on Windows that is not the release: Windows 10 1809 says
+ *  7.0.0. Same table as shared-rs persona.rs `windows_release`. */
+function windowsRelease(v: string): string {
+  if (!v.includes(".")) return v;
+  const [major, minor] = v.split(".").map((x) => parseInt(x, 10));
+  if (major === 0) return ({ 1: "7", 2: "8", 3: "8.1" } as Record<number, string>)[minor] ?? v;
+  if (major >= 1 && major <= 10) return "10";
+  if (major >= 13) return "11";
+  return v;
 }
