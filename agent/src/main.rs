@@ -481,6 +481,13 @@ pub fn core_outdated(exe: &std::path::Path) -> Option<String> {
 /// 0.3.5 rebuilt both on the same Chrome: an extension's popup is no longer
 /// taken over by the persona's scale factor (0131; Bitwarden opened as an
 /// empty square), and a phone persona's motion sensors (0135).
+///
+/// Per platform from 0.3.7, when only the Windows core was rebuilt (0904, the
+/// profile's name on the taskbar). One number for both would have offered
+/// every Mac a 105 MB download of the core it already had.
+#[cfg(windows)]
+pub const CORE_BUILD: &str = "0.3.7";
+#[cfg(not(windows))]
 pub const CORE_BUILD: &str = "0.3.5";
 
 /// `0.2.10` as (0, 2, 10); None for anything else.
@@ -543,7 +550,7 @@ const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
 #[cfg(windows)]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = Some((
     "chrome.dll",
-    "a42762f98b2b793307dd88798b9d8c4338a034c5006f56f49abfd34118b5ac85",
+    "4a7f55d5b4c556f578ed1112ff5b3e2c1b3612de8eeae1a1e5c4e3e4f4d00869",
 ));
 #[cfg(not(any(target_os = "macos", windows)))]
 const CORE_BUILD_ENGINE: Option<(&str, &str)> = None;
