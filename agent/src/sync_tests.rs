@@ -131,7 +131,7 @@ async fn round_trip(env: &Env, lock: &str) -> anyhow::Result<()> {
     let base = env.current_version().await;
     let version = env
         .server
-        .push_bundle(&env.profile, &sealed.bytes, &sealed.wrapped_key, &sealed.sha256, base, lock)
+        .push_bundle(&env.profile, &sealed.bytes, &sealed.wrapped_key, &sealed.sha256, base, lock, None)
         .await?;
     anyhow::ensure!(
         version > base,

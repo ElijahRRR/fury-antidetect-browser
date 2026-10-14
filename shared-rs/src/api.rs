@@ -177,6 +177,20 @@ pub struct LaunchSpec {
     /// Empty for owners and admins, who have no grant.
     #[serde(default)]
     pub domain_lists: Vec<DomainListText>,
+    /// The key this profile's cookies are encrypted with, wrapped under the
+    /// profile key, hex. `None` until the organisation key has been rotated
+    /// once: until then the cookie key is derived from the profile key, and
+    /// a rotation is what writes it down so it can outlive the old profile
+    /// key (migration 0020).
+    #[serde(default)]
+    pub wrapped_cookie_key: Option<String>,
+    /// The organisation key generation at the moment the lock was taken.
+    /// The shell checks the key it holds against it and hands it to the
+    /// agent, which sends it back with the bundle; a bundle sealed under a
+    /// generation that has since been replaced is refused rather than stored
+    /// unopenable. `None` from a server older than that check.
+    #[serde(default)]
+    pub key_generation: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -397,6 +397,10 @@ const en = {
   "err.noProxy":
     "This profile has no proxy, so it would go out from this machine's own address. Give it one, or tick \"Let this profile open without a proxy\" on the Proxy tab of its settings (the pencil).",
   "err.closeProfilesFirst": "Close the open profiles first: the browser they run in is the one being replaced.",
+  "err.cookieKeyChanged":
+    "This profile's cookies were saved under a key that no longer exists: the organisation key was replaced by a version of Fury that did not carry the cookie key over. Opening the profile would make the browser delete those cookies, so it was not opened.",
+  "err.orgKeyReplaced":
+    "The organisation key was replaced since this machine last unlocked it: somebody was removed from the team. Unlock with your password to take the new key, then open the profile again.",
   "err.noProxyTeam":
     "This team profile has no proxy. A team profile cannot open without one: the server will not hand it out. Give it a proxy in its settings.",
   "err.staleOrgKey": "This server offered an older organisation key than this machine has already used. Refusing: a key that goes backwards is one somebody removed from the team may still hold.",
@@ -436,8 +440,9 @@ const en = {
   "team.removeShort": "Remove",
   "team.confirmRemove": "Remove {email}? Their access ends immediately and the organisation key is replaced, so nothing they kept a copy of opens anything from now on. What they already downloaded stays on their machine — that part cannot be undone by anyone.",
   "team.rotate": "Replace the organisation key",
-  "team.rotateHint": "Replacing the key re-seals it to everyone who is still here and re-wraps every proxy. Worth doing if a machine holding it was lost — removing a member does it for you.",
-  "team.confirmRotate": "Replace the organisation key? Everyone still in the team keeps working; any copy of the old key stops opening anything new.",
+  "team.rotateHint": "Replacing the key re-seals it to everyone who is still here and carries every proxy, profile and saved login over to it. Worth doing if a machine holding it was lost — removing a member does it for you.",
+  "team.rotateUnreadable": "Done, but {n} item(s) did not open under the old key and were left as they were: bundles, cookie keys or saved logins already lost to an earlier key replacement by an older Fury.",
+  "team.confirmRotate": "Replace the organisation key? Everyone still in the team keeps their profiles, and on other machines Fury asks once for the password to take the new key; any copy of the old key stops opening anything new.",
   "team.thisAccount": "This account",
   "team.loading": "Loading the team…",
   "team.how1": "Press Invite and enter their email. You get a code: send it to them privately, with Send… if you like.",
@@ -1544,6 +1549,10 @@ const ru: Record<Key, string> = {
   "err.noProxy":
     "У этого профиля нет прокси, поэтому он пошёл бы в сеть с адреса этой машины. Укажите прокси или отметьте «Разрешить этому профилю открываться без прокси» в его настройках: карандаш, вкладка «Прокси».",
   "err.closeProfilesFirst": "Сначала закройте открытые профили: обновляется браузер, в котором они работают.",
+  "err.cookieKeyChanged":
+    "Cookies этого профиля сохранены под ключом, которого больше нет: ключ организации заменила версия Fury, которая не переносила ключ cookies. При открытии браузер удалил бы эти cookies, поэтому профиль не открыт.",
+  "err.orgKeyReplaced":
+    "Ключ организации сменился с тех пор, как эта машина его разблокировала: из команды кого-то удалили. Разблокируйте вход паролем, чтобы получить новый ключ, и откройте профиль снова.",
   "err.noProxyTeam":
     "У этого командного профиля нет прокси. Командный профиль без прокси не открывается: сервер его не выдаст. Укажите прокси в настройках профиля.",
   "err.staleOrgKey": "Сервер предложил ключ организации старее того, которым эта машина уже пользовалась. Отказ: ключ, который идёт назад, — это ключ, который может остаться у удалённого из команды.",
@@ -1578,8 +1587,9 @@ const ru: Record<Key, string> = {
   "team.removeShort": "Убрать",
   "team.confirmRemove": "Убрать {email}? Доступ прекратится сразу, а ключ организации будет заменён — то, что он сохранил, больше ничего не откроет. Скачанное им раньше останется у него на машине: этого не отменить никому.",
   "team.rotate": "Заменить ключ организации",
-  "team.rotateHint": "Замена перепечатывает ключ всем, кто остался, и перезаворачивает каждый прокси. Имеет смысл, если машина с ключом потерялась — при удалении участника это делается само.",
-  "team.confirmRotate": "Заменить ключ организации? Все, кто в команде, продолжат работать; любая копия старого ключа перестанет открывать новое.",
+  "team.rotateHint": "Замена перепечатывает ключ всем, кто остался, и переносит на него каждый прокси, профиль и сохранённый логин. Имеет смысл, если машина с ключом потерялась — при удалении участника это делается само.",
+  "team.rotateUnreadable": "Готово, но {n} шт. не открылись старым ключом и оставлены как есть: бандлы, ключи cookies или сохранённые логины, потерянные ещё при прошлой замене ключа старой версией Fury.",
+  "team.confirmRotate": "Заменить ключ организации? У всех, кто в команде, профили сохранятся, а на других машинах Fury один раз попросит пароль, чтобы взять новый ключ; любая копия старого ключа перестанет открывать новое.",
   "team.thisAccount": "Этот аккаунт",
   "team.loading": "Загружаю команду…",
   "team.how1": "Нажмите «Пригласить» и введите почту человека. Появится код: передайте его лично, например кнопкой «Отправить…».",

@@ -237,6 +237,13 @@ export function Users({
     }
   };
 
+  // A rotation carries every profile, bundle and saved login over to the new
+  // key, except what the old key could not open: lost already, to a rotation
+  // by a Fury that did not carry them. Said, because it is otherwise silent.
+  const noteUnreadable = (out: { unreadable?: number } | null) => {
+    if (out?.unreadable) setError(t("team.rotateUnreadable", { n: String(out.unreadable) }));
+  };
+
   if (local) {
     return (
       <div className="teamPane">
@@ -758,7 +765,7 @@ export function Users({
                               danger: true,
                             });
                             if (go === null) return;
-                            await run(() => withStepUp(ask, t, () => api.removeMember(m.user_id)));
+                            await run(async () => noteUnreadable(await withStepUp(ask, t, () => api.removeMember(m.user_id))));
                           }}
                         >
                           {t("team.removeShort")}
@@ -1071,7 +1078,7 @@ export function Users({
             confirmLabel: t("team.rotate"),
           });
           if (go === null) return;
-          await run(() => api.removeMember(null));
+          await run(async () => noteUnreadable(await api.removeMember(null)));
         }}
       >
         {t("team.rotate")}

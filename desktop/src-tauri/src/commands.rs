@@ -1648,12 +1648,41 @@ async fn launch_from_spec(state: &AppState, grant: &LockGrant) -> R<serde_json::
             )
         })?;
 
-    let credentials = crypto::open_proxy_credentials(
+    // Also the check that the key held here is the current one. A rotation
+    // re-wraps every proxy's data key under the new organisation key, so a
+    // proxy that will not open while the server is ahead of the generation
+    // this machine knows means a colleague removed somebody: the key here is
+    // retired, and a browser launched on it would seal its bundle under a
+    // profile key nobody else holds. Dropped, so the window asks for the
+    // password that opens the new one.
+    let held_generation = *state.ork_generation.lock().unwrap();
+    let credentials = match crypto::open_proxy_credentials(
         &org_key,
         &spec.proxy.credentials_enc,
         &spec.proxy.wrapped_dek,
-    )
-    .map_err(|e| ApiErr::local(format!("Could not open this proxy's credentials: {e}")))?;
+    ) {
+        Ok(c) => c,
+        Err(_) if spec.key_generation.is_some_and(|g| g > held_generation) => {
+            *state.org_key.lock().unwrap() = None;
+            state.session.forget_org_key();
+            return Err(ApiErr::coded(
+                "err.orgKeyReplaced",
+                "The organisation key was replaced since this machine last unlocked it — \
+                 somebody was removed from the team. Unlock with your password to take the new one.",
+            ));
+        }
+        Err(e) => return Err(ApiErr::local(format!("Could not open this proxy's credentials: {e}"))),
+    };
+    // Opened, so the key here is the generation the server named. Recorded:
+    // it is what this machine refuses to go back below at the next sign-in,
+    // and what the agent sends with the bundle.
+    if let Some(g) = spec.key_generation.filter(|g| *g > held_generation) {
+        let mut seen = state.ork_generation.lock().unwrap();
+        *seen = (*seen).max(g);
+        let mut s = state.settings.lock().unwrap();
+        s.ork_generation = *seen;
+        let _ = s.save(&state.config_dir);
+    }
 
     let seed = fury_shared::persona::seed::from_hex(&spec.fp_seed).ok_or_else(|| {
         ApiErr::local("The server sent a fingerprint seed this version cannot read.")
@@ -1700,6 +1729,16 @@ async fn launch_from_spec(state: &AppState, grant: &LockGrant) -> R<serde_json::
     // bundle it was asked for and no other — and so a colleague on a different
     // machine can open the same bundle, which is what a team profile is for.
     let profile_key = crypto::profile_key(&org_key, &spec.profile_id.to_string());
+    // Handed over explicitly rather than left to the agent to derive: after a
+    // rotation it is no longer derivable from the profile key, it is carried
+    // (migration 0020).
+    let cookie_key = crypto::cookie_key(
+        &profile_key,
+        &spec.profile_id.to_string(),
+        spec.wrapped_cookie_key.as_deref(),
+    )
+    .map_err(|e| ApiErr::local(format!("Could not open this profile's cookie key: {e}")))?;
+    let hex = |k: &[u8; 32]| k.iter().map(|b| format!("{b:02x}")).collect::<String>();
 
     Ok(crate::agent::call(
         "profile.launch",
@@ -1708,7 +1747,9 @@ async fn launch_from_spec(state: &AppState, grant: &LockGrant) -> R<serde_json::
             "profile": profile,
             "server": { "url": server, "token": token },
             "lock_token": grant.lock_token,
-            "profile_key": profile_key.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "profile_key": hex(&profile_key),
+            "cookie_key": hex(&cookie_key),
+            "key_generation": spec.key_generation,
         }),
     )
     .await?)
@@ -1957,6 +1998,78 @@ pub async fn remove_member(
         proxies.push(serde_json::json!({ "id": id, "wrapped_dek": rewrapped }));
     }
 
+    // Everything under a profile key moves to the new profile key, and every
+    // saved login to the new organisation key. Until 14.10.2026 none of it
+    // did: removing a member left every bundle, cookie jar and saved login of
+    // the team under a key nobody held any more.
+    //
+    // What the old key does not open is named, not fatal. It is already lost
+    // -- an earlier rotation by a Fury that did not carry it over -- and one
+    // such profile must not block removing somebody for good. The server
+    // refuses anything left out WITHOUT being named.
+    let list = |name: &str| -> Vec<serde_json::Value> {
+        material.get(name).and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    };
+    let text = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let mut unreadable: Vec<String> = Vec::new();
+
+    let mut cookie_keys = Vec::new();
+    for p in list("profiles") {
+        let id = text(&p, "id");
+        let wrapped = p.get("wrapped_cookie_key").and_then(|v| v.as_str());
+        match crypto::cookie_key(&crypto::profile_key(&old, &id), &id, wrapped) {
+            Ok(ck) => cookie_keys.push(serde_json::json!({
+                "profile_id": id,
+                "wrapped_cookie_key": crypto::wrap_cookie_key(&crypto::profile_key(&new_key, &id), &ck),
+            })),
+            Err(e) => {
+                tracing::warn!(profile = %id, error = %e, "the old key does not open this cookie key");
+                unreadable.push(id);
+            }
+        }
+    }
+
+    let mut bundles = Vec::new();
+    for b in list("bundles") {
+        let (id, profile_id) = (text(&b, "id"), text(&b, "profile_id"));
+        let moved = crypto::rewrap_bundle_key(
+            &crypto::profile_key(&old, &profile_id),
+            &crypto::profile_key(&new_key, &profile_id),
+            &text(&b, "wrapped_dek"),
+        );
+        match moved {
+            Ok(w) => bundles.push(serde_json::json!({ "id": id, "wrapped_dek": w })),
+            Err(e) => {
+                tracing::warn!(bundle = %id, profile = %profile_id, error = %e, "the old key does not open this bundle");
+                unreadable.push(id);
+            }
+        }
+    }
+
+    let mut credentials = Vec::new();
+    for c in list("credentials") {
+        let id = text(&c, "id");
+        match crypto::rewrap_data_key(&old, &new_key, &text(&c, "wrapped_dek")) {
+            Ok(w) => credentials.push(serde_json::json!({ "id": id, "wrapped_dek": w })),
+            Err(e) => {
+                tracing::warn!(credential = %id, error = %e, "the old key does not open this saved login");
+                unreadable.push(id);
+            }
+        }
+    }
+
+    let mut shares = Vec::new();
+    for g in list("shares") {
+        let profile_id = text(&g, "profile_id");
+        let wrapped = crypto::wrap_for_member(&crypto::profile_key(&new_key, &profile_id), &text(&g, "public_key"))
+            .map_err(|e| ApiErr::local(format!("Could not seal profile {profile_id} for the person it was given to: {e}")))?;
+        shares.push(serde_json::json!({
+            "profile_id": profile_id,
+            "user_id": text(&g, "user_id"),
+            "wrapped_key": wrapped,
+        }));
+    }
+
     let out: serde_json::Value = state
         .call(
             reqwest::Method::POST,
@@ -1966,6 +2079,11 @@ pub async fn remove_member(
                 "members": members,
                 "proxies": proxies,
                 "generation": generation,
+                "cookie_keys": cookie_keys,
+                "bundles": bundles,
+                "credentials": credentials,
+                "shares": shares,
+                "unreadable": unreadable,
             })),
             true,
         )

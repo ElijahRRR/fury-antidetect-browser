@@ -86,7 +86,9 @@ Default/Service Worker/            регистрации SW — часть са
   `net::CookieCryptoDelegate::DecryptString` не умеет сказать «недоступно» вместо
   «повреждено». Это ловится в агенте: рядом с профилем лежит отпечаток ключа
   (`Fury Key Id`), и при расхождении запуск отменяется до того, как браузер увидит
-  каталог (`agent/src/ipc.rs:1239-1253`, `shared-rs/src/keys.rs:265-281`).
+  каталог (`agent/src/ipc.rs`, `err.cookieKeyChanged`). Ротация ключа организации
+  ключ cookies не меняет: он переносится в `profiles.wrapped_cookie_key` (миграция
+  0020, см. [04](04-data-model-rbac.md)), и шелл отдаёт агенту готовый `cookie_key`.
 
 ## Формат на диске и в S3
 

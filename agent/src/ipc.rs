@@ -57,6 +57,34 @@ struct Response {
     code: Option<&'static str>,
 }
 
+/// What a team launch is handed in place of this machine's vault.
+struct TeamKeys {
+    /// Wraps the bundle's data key. Derived by the shell from the organisation
+    /// key; never the organisation key itself.
+    profile_key: [u8; 32],
+    /// What the browser encrypts cookies with. Carried, not derived, once the
+    /// organisation key has been rotated -- see migration 0020.
+    cookie_key: Option<[u8; 32]>,
+    key_generation: Option<i32>,
+}
+
+/// A 32-byte key passed as 64 hex characters, or absent.
+fn key_param(params: &serde_json::Value, name: &str) -> anyhow::Result<Option<[u8; 32]>> {
+    let Some(v) = params.get(name).and_then(|v| v.as_str()) else {
+        return Ok(None);
+    };
+    let bytes: Option<Vec<u8>> = (v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit())).then(|| {
+        (0..64)
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&v[i..i + 2], 16).ok())
+            .collect()
+    });
+    bytes
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("{name} must be 64 hex characters"))
+}
+
 /// A failure with a name the interface can translate.
 ///
 /// Carried through `anyhow` like any other error and recovered by downcast at
@@ -162,6 +190,10 @@ struct Running {
     /// shell from the organisation key. Absent for a profile that lives only
     /// here, which uses this machine's vault instead.
     profile_key: Option<[u8; 32]>,
+    /// The organisation key generation `profile_key` comes from, as the shell
+    /// checked it. Sent with the bundle so a server whose key has been
+    /// replaced since refuses it instead of storing what nobody can open.
+    key_generation: Option<i32>,
     /// Proof that this machine is the one running the browser. The server
     /// requires it on upload, so it has to outlive the heartbeat that also
     /// uses it — the push happens after the browser is already gone.
@@ -2173,7 +2205,7 @@ impl Agent {
                 // mean somebody else uploaded to the same fresh id, which is
                 // worth failing on rather than overwriting.
                 let version = server
-                    .push_bundle(&remote_id, &sealed.bytes, &sealed.wrapped_key, &sealed.sha256, 0, &lock_token)
+                    .push_bundle(&remote_id, &sealed.bytes, &sealed.wrapped_key, &sealed.sha256, 0, &lock_token, None)
                     .await?;
 
                 Ok(json!({ "bytes": sealed.bytes.len(), "version": version }))
@@ -2237,21 +2269,19 @@ impl Agent {
                 // Hex, because it is a key and hex is what the rest of this
                 // protocol uses for one. Absent means "use this machine's
                 // vault", which is what a local profile wants.
-                let profile_key = params
-                    .get("profile_key")
-                    .and_then(|v| v.as_str())
-                    .map(|v| {
-                        let bytes: Option<Vec<u8>> = (v.len() == 64
-                            && v.bytes().all(|b| b.is_ascii_hexdigit()))
-                        .then(|| {
-                            (0..64)
-                                .step_by(2)
-                                .filter_map(|i| u8::from_str_radix(&v[i..i + 2], 16).ok())
-                                .collect()
-                        });
-                        bytes
-                            .and_then(|b| <[u8; 32]>::try_from(b).ok())
-                            .ok_or_else(|| anyhow::anyhow!("profile_key must be 64 hex characters"))
+                let team = key_param(&params, "profile_key")?
+                    .map(|profile_key| -> anyhow::Result<TeamKeys> {
+                        Ok(TeamKeys {
+                            profile_key,
+                            // From a shell older than carried cookie keys: the
+                            // derivation it would have made, which is right until
+                            // the organisation's first rotation.
+                            cookie_key: key_param(&params, "cookie_key")?,
+                            key_generation: params
+                                .get("key_generation")
+                                .and_then(|v| v.as_i64())
+                                .map(|g| g as i32),
+                        })
                     })
                     .transpose()?;
                 // Off unless asked for. A debugging port nobody requested is a
@@ -2262,7 +2292,7 @@ impl Agent {
                     server,
                     lock_token,
                     inline,
-                    profile_key,
+                    team,
                     cdp,
                 )
                 .await
@@ -2447,9 +2477,11 @@ impl Agent {
         server: Option<crate::sync::Server>,
         lock_token: Option<String>,
         inline: Option<Profile>,
-        profile_key: Option<[u8; 32]>,
+        team: Option<TeamKeys>,
         cdp: bool,
     ) -> anyhow::Result<serde_json::Value> {
+        let profile_key = team.as_ref().map(|t| t.profile_key);
+        let key_generation = team.as_ref().and_then(|t| t.key_generation);
         // The lock is renewed from here, before the exit check and the bundle
         // pull, either of which can take longer than the lock lives. Aborted by
         // the guard if the launch fails, so a lock is never kept alive for a
@@ -2807,20 +2839,32 @@ impl Agent {
         // be caught HERE, before the browser sees the directory, because after
         // that the damage is done and saved. Refusing to launch is the only
         // answer that leaves the data intact.
-        let os_crypt_key = profile_key
-            .map(|k| fury_shared::keys::os_crypt_key(&k, &profile.id));
+        let os_crypt_key = team.as_ref().map(|t| {
+            t.cookie_key
+                .unwrap_or_else(|| fury_shared::keys::os_crypt_key(&t.profile_key, &profile.id))
+        });
         let key_marker = dir.join("Fury Key Id");
         if let Some(key) = os_crypt_key.as_ref() {
             let want = fury_shared::keys::key_fingerprint(key);
             if let Ok(found) = std::fs::read_to_string(&key_marker) {
                 let found = found.trim();
                 if !found.is_empty() && found != want {
-                    anyhow::bail!(
-                        "this profile's cookies were encrypted with a different key, and \
-                         opening it now would make the browser delete them. That happens when \
-                         the organisation key has been replaced since the profile was last \
-                         used. Ask an owner to hand you the current key, then try again"
-                    );
+                    // Coded, because this one lands in the Open banner: it
+                    // reached a Russian window as the English sentence below.
+                    return Err(Coded {
+                        code: "err.cookieKeyChanged",
+                        // Since 0.3.20 a rotation carries the cookie key over
+                        // (migration 0020) and a retired organisation key is
+                        // caught by the shell before it gets here, so what is
+                        // left is a profile last opened before a rotation made
+                        // by an older Fury, which did not.
+                        message: "this profile's cookies were saved under a key that no longer \
+                                  exists: the organisation key was replaced by a version of Fury \
+                                  that did not carry the cookie key over. Opening the profile \
+                                  would make the browser delete those cookies, so it was not opened"
+                            .into(),
+                    }
+                    .into());
                 }
             }
         }
@@ -2986,6 +3030,7 @@ impl Agent {
                 relay: relay_task,
                 server: server.map(|s| (s, pulled_version)),
                 profile_key,
+                key_generation,
                 lock_token,
                 heartbeat,
             },
@@ -3120,6 +3165,7 @@ impl Agent {
                             &sealed.sha256,
                             base,
                             &token,
+                            entry.key_generation,
                         )
                         .await;
                     let push_ms = push_started.elapsed().as_millis() as u64;
@@ -3440,6 +3486,7 @@ mod exit_check_tests {
                 child,
                 server: None,
                 profile_key: None,
+                key_generation: None,
                 lock_token: None,
                 heartbeat: None,
                 relay_port: 0,

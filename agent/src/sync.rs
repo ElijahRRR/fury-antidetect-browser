@@ -143,14 +143,23 @@ impl Server {
         sha256: &str,
         base_version: i32,
         lock_token: &str,
+        key_generation: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let res = Self::client()?
+        let mut req = Self::client()?
             .post(format!("{}/v1/profiles/{profile_id}/bundle", self.url))
             .bearer_auth(&self.token)
             .header("x-fury-sha256", sha256)
             .header("x-fury-wrapped-key", wrapped_key)
             .header("x-fury-base-version", base_version.to_string())
-            .header("x-fury-lock-token", lock_token)
+            .header("x-fury-lock-token", lock_token);
+        // Which organisation key the bundle's key came from. A server whose
+        // key was replaced while this browser ran refuses the bundle with 409,
+        // which leaves the work here as an unsent session -- better than a
+        // version on the server nobody holding the new key can open.
+        if let Some(g) = key_generation {
+            req = req.header("x-fury-key-generation", g.to_string());
+        }
+        let res = req
             .body(bytes.to_vec())
             .send()
             .await

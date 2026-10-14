@@ -3557,8 +3557,39 @@ async fn rotation_material(
         .fetch_one(db.as_mut())
         .await?;
 
+    // Everything else the old key reaches, and which a rotation that moved
+    // only members and proxies left behind. Until 14.10.2026 it did: every
+    // bundle, cookie jar and saved login of the organisation stopped opening
+    // the moment somebody was removed (migration 0020 says how that was met).
+    let profiles = rotation_profiles(db.as_mut(), caller.org_id).await?;
+    let bundles = rotation_bundles(db.as_mut(), caller.org_id).await?;
+    let credentials = rotation_credentials(db.as_mut(), caller.org_id).await?;
+    let shares = rotation_shares(db.as_mut(), caller.org_id).await?;
+
     Ok(Json(json!({
         "generation": generation,
+        // Every profile, for its cookie key: unwrapped under the old profile
+        // key when one is stored, derived from it when not, and wrapped under
+        // the new one either way.
+        "profiles": profiles.iter().map(|(id, ck)| json!({
+            "id": id, "wrapped_cookie_key": ck.as_deref().map(hex),
+        })).collect::<Vec<_>>(),
+        // Every version of every bundle sealed under a profile key. Stored as
+        // the agent's own text (`fury:ork1:` and base64), so it goes out as
+        // that text and comes back as it.
+        "bundles": bundles.iter().map(|(id, profile_id, w)| json!({
+            "id": id, "profile_id": profile_id, "wrapped_dek": String::from_utf8_lossy(w),
+        })).collect::<Vec<_>>(),
+        // Saved logins: a data key under the organisation key, stored as hex
+        // text -- the same shape the credential endpoints read and write.
+        "credentials": credentials.iter().map(|(id, w)| json!({
+            "id": id, "wrapped_dek": String::from_utf8_lossy(w),
+        })).collect::<Vec<_>>(),
+        // Profiles handed to somebody by key: the new profile key has to be
+        // sealed to them again, or the profile stops opening for them.
+        "shares": shares.iter().map(|(profile_id, user_id, pk)| json!({
+            "profile_id": profile_id, "user_id": user_id, "public_key": b64(pk),
+        })).collect::<Vec<_>>(),
         "members": members.iter().map(|(id, email, pk)| json!({
             "user_id": id, "email": email, "public_key": b64(pk),
         })).collect::<Vec<_>>(),
@@ -3568,6 +3599,69 @@ async fn rotation_material(
             "id": id, "wrapped_dek": dek.as_deref().map(hex),
         })).collect::<Vec<_>>(),
     })))
+}
+
+/// Every profile of the organisation with its stored cookie key, if any.
+/// Deleted ones too: the trash can be emptied back into use, and a profile
+/// restored with a cookie key from a retired generation is the failure this
+/// exists to stop.
+pub(crate) async fn rotation_profiles(
+    db: &mut sqlx::PgConnection,
+    org_id: Uuid,
+) -> Result<Vec<(Uuid, Option<Vec<u8>>)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, wrapped_cookie_key FROM profiles WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_all(db)
+        .await
+}
+
+/// Every bundle sealed under a profile key. One sealed under a machine key
+/// (no prefix, from before team bundles had their own) opens only on the
+/// machine that packed it, whatever the organisation key is, and is left alone.
+pub(crate) async fn rotation_bundles(
+    db: &mut sqlx::PgConnection,
+    org_id: Uuid,
+) -> Result<Vec<(Uuid, Uuid, Vec<u8>)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT b.id, b.profile_id, b.wrapped_dek FROM bundles b \
+         JOIN profiles p ON p.id = b.profile_id \
+         WHERE p.org_id = $1 AND position($2::bytea IN b.wrapped_dek) = 1",
+    )
+    .bind(org_id)
+    .bind(fury_shared::keys::SHARED_BUNDLE_PREFIX.as_bytes())
+    .fetch_all(db)
+    .await
+}
+
+pub(crate) async fn rotation_credentials(
+    db: &mut sqlx::PgConnection,
+    org_id: Uuid,
+) -> Result<Vec<(Uuid, Vec<u8>)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT c.id, c.wrapped_dek FROM credentials c \
+         JOIN profiles p ON p.id = c.profile_id WHERE p.org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Profiles given to a person with the key sealed to them, and that person's
+/// public key. The person may be in another organisation; `users` is not
+/// behind a policy, and the grant is.
+pub(crate) async fn rotation_shares(
+    db: &mut sqlx::PgConnection,
+    org_id: Uuid,
+) -> Result<Vec<(Uuid, Uuid, Vec<u8>)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT g.profile_id, g.user_id, u.public_key FROM profile_grants g \
+         JOIN profiles p ON p.id = g.profile_id \
+         JOIN users u ON u.id = g.user_id \
+         WHERE p.org_id = $1 AND g.wrapped_key IS NOT NULL",
+    )
+    .bind(org_id)
+    .fetch_all(db)
+    .await
 }
 
 #[derive(Deserialize)]
@@ -3583,6 +3677,54 @@ pub struct RotateRequest {
     /// The generation this was computed against, so two administrators
     /// rotating at once cannot half-apply each other's work.
     generation: i32,
+    /// Each profile's cookie key, wrapped under its new profile key.
+    #[serde(default)]
+    cookie_keys: Vec<RotatedCookieKey>,
+    /// Each bundle's data key, wrapped under its new profile key.
+    #[serde(default)]
+    bundles: Vec<RotatedBundle>,
+    /// Each saved login's data key, under the new organisation key.
+    #[serde(default)]
+    credentials: Vec<RotatedCredential>,
+    /// The new profile key, sealed to each person a profile was given to.
+    #[serde(default)]
+    shares: Vec<RotatedShare>,
+    /// Bundles, saved logins and cookie keys the old key did not open. Named
+    /// rather than silently left out, so that "this client could not" and
+    /// "this client did not know to" stay two different things: the first is
+    /// left as it is, the second refuses the rotation. They are already lost
+    /// to the old key -- an earlier rotation by a Fury that did not carry them
+    /// over -- and refusing would make one such profile block removing anyone
+    /// for good.
+    #[serde(default)]
+    unreadable: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
+pub struct RotatedCookieKey {
+    profile_id: Uuid,
+    wrapped_cookie_key: String,
+}
+
+#[derive(Deserialize)]
+pub struct RotatedBundle {
+    id: Uuid,
+    /// The agent's text form, `fury:ork1:` and base64.
+    wrapped_dek: String,
+}
+
+#[derive(Deserialize)]
+pub struct RotatedCredential {
+    id: Uuid,
+    /// Hex, as the credential endpoints store it.
+    wrapped_dek: String,
+}
+
+#[derive(Deserialize)]
+pub struct RotatedShare {
+    profile_id: Uuid,
+    user_id: Uuid,
+    wrapped_key: String,
 }
 
 #[derive(Deserialize)]
@@ -3786,6 +3928,120 @@ async fn rotate_org_key(
             .await?;
     }
 
+    // The rest of what the old key reaches, read again inside the transaction
+    // and under the lock: a bundle uploaded between the material and this
+    // request is one the client never saw, and has to refuse the rotation
+    // rather than be left under a key nobody will hold.
+    let unreadable: std::collections::HashSet<Uuid> = req.unreadable.iter().copied().collect();
+    // Said once for all four. The likely cause of a gap is not a bug but a
+    // Fury from before 0.3.20, which rotates members and proxies and knows
+    // nothing else -- and finishing its rotation is what broke profiles.
+    let missing = |what: &str, id: Uuid| {
+        ApiError::BadRequest(format!(
+            "this rotation leaves {what} {id} under the old key, where nobody could open it \
+             again. Update Fury on this machine and remove the member again"
+        ))
+    };
+
+    let profiles = rotation_profiles(&mut tx, caller.org_id).await?;
+    let supplied: std::collections::HashSet<Uuid> =
+        req.cookie_keys.iter().map(|c| c.profile_id).collect();
+    if let Some((id, _)) = profiles
+        .iter()
+        .find(|(id, _)| !supplied.contains(id) && !unreadable.contains(id))
+    {
+        return Err(missing("the cookie key of profile", *id));
+    }
+    for c in &req.cookie_keys {
+        let wrapped = unhex("wrapped_cookie_key", &c.wrapped_cookie_key)?;
+        if wrapped.len() < 40 {
+            return Err(ApiError::BadRequest("that is not a wrapped cookie key".into()));
+        }
+        sqlx::query("UPDATE profiles SET wrapped_cookie_key = $1 WHERE id = $2 AND org_id = $3")
+            .bind(&wrapped)
+            .bind(c.profile_id)
+            .bind(caller.org_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    let bundles = rotation_bundles(&mut tx, caller.org_id).await?;
+    let supplied: std::collections::HashSet<Uuid> = req.bundles.iter().map(|b| b.id).collect();
+    if let Some((id, _, _)) = bundles
+        .iter()
+        .find(|(id, _, _)| !supplied.contains(id) && !unreadable.contains(id))
+    {
+        return Err(missing("bundle", *id));
+    }
+    for b in &req.bundles {
+        if !b.wrapped_dek.starts_with(fury_shared::keys::SHARED_BUNDLE_PREFIX) || b.wrapped_dek.len() < 60 {
+            return Err(ApiError::BadRequest("that is not a wrapped bundle key".into()));
+        }
+        sqlx::query(
+            "UPDATE bundles SET wrapped_dek = $1 WHERE id = $2 \
+             AND profile_id IN (SELECT id FROM profiles WHERE org_id = $3)",
+        )
+        .bind(b.wrapped_dek.as_bytes())
+        .bind(b.id)
+        .bind(caller.org_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let credentials = rotation_credentials(&mut tx, caller.org_id).await?;
+    let supplied: std::collections::HashSet<Uuid> = req.credentials.iter().map(|c| c.id).collect();
+    if let Some((id, _)) = credentials
+        .iter()
+        .find(|(id, _)| !supplied.contains(id) && !unreadable.contains(id))
+    {
+        return Err(missing("saved login", *id));
+    }
+    for c in &req.credentials {
+        // Checked as hex and stored as the text, which is how the credential
+        // endpoints keep it (`create_credential`).
+        if unhex("wrapped_dek", &c.wrapped_dek)?.len() < 40 {
+            return Err(ApiError::BadRequest("that is not a wrapped data key".into()));
+        }
+        sqlx::query(
+            "UPDATE credentials SET wrapped_dek = $1 WHERE id = $2 \
+             AND profile_id IN (SELECT id FROM profiles WHERE org_id = $3)",
+        )
+        .bind(c.wrapped_dek.as_bytes())
+        .bind(c.id)
+        .bind(caller.org_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // No "unreadable" here: the new profile key is computed, not opened, so
+    // there is nothing that could fail to open.
+    let shares = rotation_shares(&mut tx, caller.org_id).await?;
+    let supplied: std::collections::HashSet<(Uuid, Uuid)> =
+        req.shares.iter().map(|g| (g.profile_id, g.user_id)).collect();
+    if let Some((profile_id, _, _)) = shares
+        .iter()
+        .find(|(p, u, _)| !supplied.contains(&(*p, *u)))
+    {
+        return Err(missing("the share of profile", *profile_id));
+    }
+    for g in &req.shares {
+        let wrapped = unhex_or_b64("wrapped_key", &g.wrapped_key)?;
+        if wrapped.len() < 104 {
+            return Err(ApiError::BadRequest("that is not a sealed profile key".into()));
+        }
+        sqlx::query(
+            "UPDATE profile_grants SET wrapped_key = $1 \
+             WHERE profile_id = $2 AND user_id = $3 AND wrapped_key IS NOT NULL \
+             AND profile_id IN (SELECT id FROM profiles WHERE org_id = $4)",
+        )
+        .bind(&wrapped)
+        .bind(g.profile_id)
+        .bind(g.user_id)
+        .bind(caller.org_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     sqlx::query("UPDATE organizations SET ork_generation = $1 WHERE id = $2")
         .bind(next)
         .bind(caller.org_id)
@@ -3795,8 +4051,19 @@ async fn rotate_org_key(
     tx.commit().await?;
 
     audit(db.as_mut(), &caller, "org.rotate", None,
-          json!({ "removed": req.remove_user_id, "generation": next })).await?;
-    Ok(Json(json!({ "generation": next, "removed": req.remove_user_id })))
+          json!({
+              "removed": req.remove_user_id,
+              "generation": next,
+              "bundles": req.bundles.len(),
+              "credentials": req.credentials.len(),
+              "shares": req.shares.len(),
+              "unreadable": req.unreadable.len(),
+          })).await?;
+    Ok(Json(json!({
+        "generation": next,
+        "removed": req.remove_user_id,
+        "unreadable": req.unreadable.len(),
+    })))
 }
 
 /// Accepts hex, or base64 — `hand_over_key` established base64 for a sealed
@@ -3978,10 +4245,16 @@ async fn launch_spec(db: &mut sqlx::PgConnection, profile_id: Uuid) -> ApiResult
         px_port: Option<i32>,
         credentials_enc: Option<Vec<u8>>,
         wrapped_dek: Option<Vec<u8>>,
+        wrapped_cookie_key: Option<Vec<u8>>,
+        key_generation: Option<i32>,
     }
 
+    // The generation through a subquery rather than a join: organizations has
+    // its own policy, and a profile someone was given from another
+    // organisation must still produce a spec -- with no generation, which the
+    // shell and the agent treat as "not checked".
     let row: Row = sqlx::query_as(
-        "SELECT f.name, f.persona_id, f.fp_seed, f.timezone, f.languages, f.start_urls, f.overrides,                 x.id AS px_id, x.kind::text AS px_kind, x.host AS px_host, x.port AS px_port,                 x.credentials_enc, x.wrapped_dek          FROM profiles f          LEFT JOIN proxies x ON x.id = f.proxy_id AND x.deleted_at IS NULL          WHERE f.id = $1 AND f.deleted_at IS NULL",
+        "SELECT f.name, f.persona_id, f.fp_seed, f.timezone, f.languages, f.start_urls, f.overrides,                 x.id AS px_id, x.kind::text AS px_kind, x.host AS px_host, x.port AS px_port,                 x.credentials_enc, x.wrapped_dek, f.wrapped_cookie_key,                 (SELECT o.ork_generation FROM organizations o WHERE o.id = f.org_id) AS key_generation          FROM profiles f          LEFT JOIN proxies x ON x.id = f.proxy_id AND x.deleted_at IS NULL          WHERE f.id = $1 AND f.deleted_at IS NULL",
     )
     .bind(profile_id)
     .fetch_optional(&mut *db)
@@ -4041,6 +4314,10 @@ async fn launch_spec(db: &mut sqlx::PgConnection, profile_id: Uuid) -> ApiResult
         // Filled in by the caller that knows who is launching; the spec
         // itself is about the profile.
         domain_lists: Vec::new(),
+        wrapped_cookie_key: row
+            .wrapped_cookie_key
+            .map(|v| v.iter().map(|b| format!("{b:02x}")).collect()),
+        key_generation: row.key_generation,
         proxy: fury_shared::api::SealedProxy {
             id: px_id,
             kind,
@@ -4379,6 +4656,10 @@ async fn upload_bundle(
     let base_version: i32 = header("x-fury-base-version")
         .and_then(|v| v.parse().ok())
         .ok_or_else(|| ApiError::BadRequest("missing x-fury-base-version".into()))?;
+    // The organisation key generation the bundle's key was derived from, as
+    // the shell checked it at launch. Absent from an agent older than the
+    // check, which is let through as before.
+    let key_generation: Option<i32> = header("x-fury-key-generation").and_then(|v| v.parse().ok());
 
     // Holding the lock is what authorises an upload — the permission only says
     // this person may work on the profile at all.
@@ -4519,6 +4800,37 @@ async fn upload_bundle(
         .map_err(|e| ApiError::Internal(e.into()))?;
 
     let mut tx = db.begin().await?;
+
+    // A bundle sealed under a profile key from before a rotation opens for
+    // nobody who holds the current key. That is a browser left open across a
+    // colleague removing somebody: it was launched with the old key and closes
+    // after the new one exists. Refused, so the work stays on that machine
+    // (the agent keeps an unsent session) and goes up sealed under the new key
+    // the next time it is opened.
+    //
+    // FOR SHARE on the organisation's row, so a rotation (FOR UPDATE) cannot
+    // commit between this check and the insert; one that starts after it
+    // sees this row and is refused as incomplete -- its client never re-wrapped
+    // it.
+    if let Some(sealed_under) = key_generation {
+        let current: Option<i32> = sqlx::query_scalar(
+            "SELECT o.ork_generation FROM organizations o \
+             WHERE o.id = (SELECT org_id FROM profiles WHERE id = $1) FOR SHARE",
+        )
+        .bind(profile_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(current) = current.filter(|c| sealed_under < *c) {
+            drop(tx);
+            let _ = std::fs::remove_file(bundle_root().join(&key));
+            return Err(ApiError::Conflict(format!(
+                "this browser was opened with organisation key generation {sealed_under}, and the \
+                 key has been replaced since (now {current}). What it saved would open for nobody. \
+                 Unlock with your password and open the profile again to send it"
+            )));
+        }
+    }
+
     sqlx::query(
         "INSERT INTO bundles (id, profile_id, version, kind, s3_key, size_bytes, sha256,
                               wrapped_dek, uploaded_by)

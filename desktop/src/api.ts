@@ -911,7 +911,7 @@ export const api = {
 
   /** Remove a member and replace the organisation key. Pass null to rotate
    *  without removing anyone — after a lost laptop, say. */
-  removeMember: (userId: string | null): Promise<{ generation: number }> =>
+  removeMember: (userId: string | null): Promise<{ generation: number; unreadable?: number }> =>
     cmd("remove_member", { userId }),
 
   /** AI assistants over MCP: which are connected, and connecting them. See

@@ -941,3 +941,69 @@ db_test!(a_role_rewrites_the_grants_on_it_under_each_persons_ceiling, c, {
     assert!(sqlx::query("INSERT INTO org_access_roles (id, org_id, name, permissions) VALUES (gen_random_uuid(), $1::uuid, 'y', 1)")
         .bind(ORG_A).execute(&mut c).await.is_err());
 });
+
+// ---------------------------------------------------------------------------
+// 0020: a rotation reaches everything the old key does
+// ---------------------------------------------------------------------------
+
+db_test!(rotation_material_lists_what_the_old_key_reaches, c, {
+    make_shared_fixture(&mut c).await;
+    share_with_b(&mut c, "NULL", "'\\x0102'").await;
+    let org = uuid::Uuid::parse_str(ORG_A).unwrap();
+    // Two bundles under a profile key, one under the machine that packed it
+    // (no prefix: the organisation key has nothing to do with it), and a
+    // saved login.
+    let sql = format!(
+        "INSERT INTO bundles (id, profile_id, version, kind, s3_key, size_bytes, sha256, wrapped_dek, uploaded_by) VALUES
+           ('00000000-0000-0000-0000-0000000000b1','{SHARED}',1,'snapshot','k1',1,'\\x00',convert_to('fury:ork1:AAAA','UTF8'),'{USER_A}'),
+           ('00000000-0000-0000-0000-0000000000b2','{SHARED}',2,'snapshot','k2',1,'\\x00',convert_to('fury:ork1:BBBB','UTF8'),'{USER_A}'),
+           ('00000000-0000-0000-0000-0000000000b3','{PRIVATE}',1,'snapshot','k3',1,'\\x00',convert_to('v10machine','UTF8'),'{USER_A}');
+         INSERT INTO credentials (id, profile_id, label, payload_enc, wrapped_dek) VALUES
+           ('00000000-0000-0000-0000-0000000000c1','{SHARED}','x','\\x00',convert_to('abcd','UTF8'));
+         UPDATE profiles SET wrapped_cookie_key = '\\x0a0b' WHERE id = '{SHARED}';"
+    );
+    c.execute(sql.as_str()).await.expect("seed");
+
+    let mut bundles: Vec<String> = crate::api::rotation_bundles(&mut c, org)
+        .await
+        .expect("bundles")
+        .into_iter()
+        .map(|(_, _, w)| String::from_utf8(w).unwrap())
+        .collect();
+    bundles.sort();
+    assert_eq!(bundles, ["fury:ork1:AAAA", "fury:ork1:BBBB"], "every version, and no machine-sealed one");
+
+    let profiles = crate::api::rotation_profiles(&mut c, org).await.expect("profiles");
+    assert_eq!(profiles.len(), 2);
+    let shared = uuid::Uuid::parse_str(SHARED).unwrap();
+    assert_eq!(profiles.iter().find(|(id, _)| *id == shared).unwrap().1.as_deref(), Some(&[0x0a, 0x0b][..]));
+
+    let creds = crate::api::rotation_credentials(&mut c, org).await.expect("credentials");
+    assert_eq!(creds.len(), 1);
+    assert_eq!(creds[0].1, b"abcd");
+
+    // The grantee is in another organisation, and is listed with their key.
+    let shares = crate::api::rotation_shares(&mut c, org).await.expect("shares");
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].1, uuid::Uuid::parse_str(USER_B).unwrap());
+
+    // And nothing of A's reaches B's rotation.
+    bind(&mut c, USER_B).await;
+    let b = uuid::Uuid::parse_str(ORG_B).unwrap();
+    assert!(crate::api::rotation_bundles(&mut c, b).await.expect("b bundles").is_empty());
+    assert!(crate::api::rotation_profiles(&mut c, b).await.expect("b profiles").is_empty());
+});
+
+db_test!(an_upload_reads_the_generation_it_is_checked_against, c, {
+    make_shared_fixture(&mut c).await;
+    // The statement upload_bundle runs inside its transaction.
+    let g: Option<i32> = sqlx::query_scalar(
+        "SELECT o.ork_generation FROM organizations o \
+         WHERE o.id = (SELECT org_id FROM profiles WHERE id = $1) FOR SHARE",
+    )
+    .bind(uuid::Uuid::parse_str(SHARED).unwrap())
+    .fetch_optional(&mut c)
+    .await
+    .expect("generation");
+    assert_eq!(g, Some(1));
+});

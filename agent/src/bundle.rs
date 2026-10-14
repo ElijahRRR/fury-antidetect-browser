@@ -79,7 +79,7 @@ pub enum Sealer<'a> {
 /// from the vault's own prefix so that neither can be mistaken for the other:
 /// silently trying the wrong key would fail as "wrong password" a long way from
 /// the cause.
-const SHARED_PREFIX: &str = "fury:ork1:";
+const SHARED_PREFIX: &str = fury_shared::keys::SHARED_BUNDLE_PREFIX;
 
 impl Sealer<'_> {
     fn seal(&self, plain: &str) -> String {

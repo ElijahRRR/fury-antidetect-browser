@@ -220,6 +220,43 @@ pub fn rewrap_data_key(old: &[u8; 32], new: &[u8; 32], wrapped_hex: &str) -> any
     Ok(hex(&keys::wrap(new, &dek)))
 }
 
+/// Move a bundle's data key from one profile key to another.
+///
+/// The stored form is the agent's (`agent/src/bundle.rs`): the shared prefix,
+/// then base64. A bundle without the prefix is sealed under the machine that
+/// packed it, has nothing to do with the organisation key, and is never handed
+/// here -- the server lists only prefixed ones.
+pub fn rewrap_bundle_key(old: &[u8; 32], new: &[u8; 32], stored: &str) -> anyhow::Result<String> {
+    let rest = stored
+        .strip_prefix(keys::SHARED_BUNDLE_PREFIX)
+        .ok_or_else(|| anyhow::anyhow!("the bundle key is not sealed under a profile key"))?;
+    let dek = keys::unwrap(old, &unb64("wrapped_dek", rest)?)?;
+    Ok(format!("{}{}", keys::SHARED_BUNDLE_PREFIX, b64(&keys::wrap(new, &dek))))
+}
+
+/// The key a profile's cookies are encrypted with.
+///
+/// Stored, wrapped under the profile key, once the organisation key has been
+/// rotated (migration 0020); derived from the profile key, as patch 0110 has
+/// always done, before that. The two agree at the moment a rotation writes it
+/// down -- the stored value IS the derived one, carried across -- so a profile
+/// never sees its cookie key change.
+pub fn cookie_key(
+    profile_key: &[u8; 32],
+    profile_id: &str,
+    wrapped_hex: Option<&str>,
+) -> anyhow::Result<[u8; 32]> {
+    match wrapped_hex {
+        Some(w) => key32("the cookie key", keys::unwrap(profile_key, &unhex("wrapped_cookie_key", w)?)?),
+        None => Ok(keys::os_crypt_key(profile_key, profile_id)),
+    }
+}
+
+/// A cookie key wrapped under a profile key, as the server stores it.
+pub fn wrap_cookie_key(profile_key: &[u8; 32], cookie_key: &[u8; 32]) -> String {
+    hex(&keys::wrap(profile_key, cookie_key))
+}
+
 /// Open a data key wrapped under the organisation key.
 ///
 /// The first half of `rewrap_data_key`, needed on its own by sharing: the key
@@ -257,6 +294,36 @@ pub fn wrap_for_member(org_key: &[u8; 32], member_public_key: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a rotation does to one profile, end to end on the key side: the
+    /// bundle key moves to the new profile key, and the cookie key the browser
+    /// is handed afterwards is the one it had before.
+    #[test]
+    fn a_rotation_moves_the_bundle_key_and_keeps_the_cookie_key() {
+        let (old_ork, new_ork) = (keys::new_org_key(), keys::new_org_key());
+        let id = "01a010f3-69c8-7a72-bc3d-4d71698a5b4f";
+        let (old_p, new_p) = (profile_key(&old_ork, id), profile_key(&new_ork, id));
+
+        // As the agent seals it.
+        let dek = keys::new_org_key();
+        let stored = format!("{}{}", keys::SHARED_BUNDLE_PREFIX, b64(&keys::wrap(&old_p, &dek)));
+        let moved = rewrap_bundle_key(&old_p, &new_p, &stored).unwrap();
+        let opened = keys::unwrap(&new_p, &unb64("", moved.strip_prefix(keys::SHARED_BUNDLE_PREFIX).unwrap()).unwrap()).unwrap();
+        assert_eq!(opened, dek);
+        assert!(rewrap_bundle_key(&new_p, &old_p, &stored).is_err(), "opened under the wrong key");
+
+        // Before any rotation nothing is stored and the key is derived.
+        let before = cookie_key(&old_p, id, None).unwrap();
+        let wrapped = wrap_cookie_key(&new_p, &before);
+        assert_eq!(cookie_key(&new_p, id, Some(&wrapped)).unwrap(), before);
+        // Derived from the new profile key it would differ -- the bug.
+        assert_ne!(cookie_key(&new_p, id, None).unwrap(), before);
+
+        // And a second rotation carries the stored one on again.
+        let newer_p = profile_key(&keys::new_org_key(), id);
+        let again = wrap_cookie_key(&newer_p, &cookie_key(&new_p, id, Some(&wrapped)).unwrap());
+        assert_eq!(cookie_key(&newer_p, id, Some(&again)).unwrap(), before);
+    }
 
     #[test]
     fn the_newcomer_and_the_owner_compute_the_same_verification_code() {

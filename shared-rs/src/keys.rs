@@ -267,6 +267,14 @@ pub fn os_crypt_key(profile_key: &[u8; KEY_LEN], profile_id: &str) -> [u8; KEY_L
     subkey(profile_key, "fury-oscrypt-v1", profile_id)
 }
 
+/// The prefix of a bundle data key wrapped under a profile key, as the agent
+/// stores it and the server keeps it in `bundles.wrapped_dek`: this, then the
+/// standard base64 of `wrap(profile_key, dek)`. In one place because two
+/// processes write it -- the agent sealing a bundle, the shell re-wrapping it
+/// during a rotation -- and a rotation that spelled it differently would leave
+/// every bundle unopenable while looking like it had succeeded.
+pub const SHARED_BUNDLE_PREFIX: &str = "fury:ork1:";
+
 /// A name for a key that is safe to write down.
 ///
 /// Eight bytes of HKDF over the key, hex. Recorded beside a profile so the agent
