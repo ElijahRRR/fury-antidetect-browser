@@ -47,9 +47,11 @@ pub fn cmd_persona(args: &[String]) -> Result<()> {
         // and an id nobody can read is a catalogue nobody can reason about.
         let short_gpu: String = {
             let flat = gpu.replace(&[',', '(', ')', ':'][..], " ");
-            let words: Vec<&str> = flat.split_whitespace().collect();
+            // "(TM)" sits between a phone GPU's family and its number:
+            // "Adreno (TM) 722".
+            let words: Vec<&str> = flat.split_whitespace().filter(|w| *w != "TM").collect();
             let at = words.iter().position(|w| {
-                ["RTX", "GTX", "Radeon", "Iris", "UHD"].contains(w)
+                ["RTX", "GTX", "Radeon", "Iris", "UHD", "Adreno", "Mali", "PowerVR"].contains(w)
                     || (*w == "M5" || *w == "M4" || *w == "M3" || *w == "M2" || *w == "M1")
             });
             match at {
