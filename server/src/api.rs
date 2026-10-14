@@ -3609,6 +3609,40 @@ pub struct RotatedProxy {
 /// Everything lands in one transaction. A half-rotated organisation is one
 /// where some proxies open under the old key and some under the new, and no
 /// single member can read all of them.
+/// Whether `caller` may remove a member whose role is `target`. The same
+/// line set_member_role draws: the owner is out of reach, and an admin
+/// manages managers and members, not other admins.
+fn may_remove(caller: fury_shared::rbac::OrgRole, target: fury_shared::rbac::OrgRole) -> ApiResult<()> {
+    use fury_shared::rbac::OrgRole;
+    match (caller, target) {
+        (_, OrgRole::Owner) => Err(ApiError::BadRequest("the owner cannot be removed from the organisation".into())),
+        (OrgRole::Owner, _) => Ok(()),
+        (OrgRole::Admin, OrgRole::Admin) => Err(ApiError::Denied(Perm::ManageAccess)),
+        (OrgRole::Admin, _) => Ok(()),
+        _ => Err(ApiError::Denied(Perm::ManageAccess)),
+    }
+}
+
+#[cfg(test)]
+mod may_remove_tests {
+    use super::may_remove;
+    use fury_shared::rbac::OrgRole::*;
+
+    #[test]
+    fn nobody_removes_the_owner_and_an_admin_stays_below_admin() {
+        for caller in [Owner, Admin, Manager, Member] {
+            assert!(may_remove(caller, Owner).is_err(), "{caller:?} removed the owner");
+        }
+        assert!(may_remove(Owner, Admin).is_ok());
+        assert!(may_remove(Owner, Member).is_ok());
+        assert!(may_remove(Admin, Admin).is_err());
+        assert!(may_remove(Admin, Manager).is_ok());
+        assert!(may_remove(Admin, Member).is_ok());
+        assert!(may_remove(Manager, Member).is_err());
+        assert!(may_remove(Member, Member).is_err());
+    }
+}
+
 async fn rotate_org_key(
     mut db: auth::Db,
     headers: HeaderMap,
@@ -3654,6 +3688,21 @@ async fn rotate_org_key(
     }
 
     if let Some(gone) = req.remove_user_id {
+        // Who may be removed is who may have their role changed
+        // (set_member_role): never the owner, and an admin only below admin.
+        // Until 14.10.2026 the caller's role was checked and the target's was
+        // not, so an admin could remove the owner, rotating the key to
+        // everyone but them.
+        let target: Option<String> = sqlx::query_scalar(
+            "SELECT role::text FROM org_members WHERE org_id = $1 AND user_id = $2 FOR UPDATE",
+        )
+        .bind(caller.org_id)
+        .bind(gone)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let target = target.and_then(|r| auth::parse_role(&r)).ok_or(ApiError::NotFound)?;
+        may_remove(caller.role, target)?;
+
         let removed = sqlx::query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2")
             .bind(caller.org_id)
             .bind(gone)

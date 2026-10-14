@@ -731,7 +731,7 @@ export function Users({
                           already ticked. Which folders is asked, not assumed: a
                           tester who invited somebody for one client found them
                           looking at all of them (01.10.2026). */}
-                      {!m.has_key && (
+                      {isAdmin && !m.has_key && (
                         <button
                           disabled={busy}
                           onClick={() =>
@@ -743,7 +743,10 @@ export function Users({
                           {teamProjects.length > 0 ? t("team.letIn") : t("team.giveKey")}
                         </button>
                       )}
-                      {!m.is_you && (
+                      {/* Removing follows the role rule: not yourself, never
+                          the owner, an admin only below admin. A member saw
+                          "Remove" beside the owner (14.10.2026). */}
+                      {canChangeRole(myRole, m) && (
                         <button
                           className="ghost danger"
                           disabled={busy}
