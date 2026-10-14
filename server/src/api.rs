@@ -965,6 +965,12 @@ async fn whoami(
         "org_id": caller.org_id,
         "role": caller.role,
         "has_org_key": has_org_key,
+        // So the application can tell a self-hosting owner their server is
+        // behind the latest release; the tester who runs his own learned of
+        // server updates only when told (14.10.2026). Here and not in
+        // /v1/server: that one answers strangers, and a version is what a
+        // scanner looks for first.
+        "server_version": env!("CARGO_PKG_VERSION"),
     })))
 }
 

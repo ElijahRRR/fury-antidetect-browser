@@ -566,6 +566,9 @@ pub struct Me {
     pub email: String,
     pub org_id: String,
     pub role: String,
+    /// Absent from servers before 0.4.2, which is itself the answer: older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
 }
 
 #[derive(Deserialize)]

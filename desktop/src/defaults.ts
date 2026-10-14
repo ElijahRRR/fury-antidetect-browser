@@ -35,3 +35,21 @@
  *  server ever moves, this is the only line in the desktop to change.
  */
 export const DEFAULT_SERVER = "srv.furybrowser.dev";
+
+/** Servers this project runs, under every name they answer to. Their owners
+ *  are not the people using them, so a "your server is behind" notice is not
+ *  shown for them: nobody there could act on it. */
+export const OUR_SERVERS = [DEFAULT_SERVER, "204-168-178-23.sslip.io"];
+
+/** `a` is a newer dotted version than `b`. Numeric, so 0.10.0 beats 0.9.0;
+ *  a leading v and a pre-release suffix are ignored, as in src-tauri/update.rs. */
+export function versionNewer(a: string, b: string): boolean {
+  const parts = (v: string) =>
+    v.replace(/^[vV]/, "").split(/[-+]/)[0].split(".").map((p) => parseInt(p, 10) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}

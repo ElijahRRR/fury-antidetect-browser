@@ -32,6 +32,7 @@ import { useTheme } from "./theme";
 import { exitSharing } from "./consistency";
 import { isSuggested } from "./status";
 import { Select } from "./components/Select";
+import { OUR_SERVERS, versionNewer } from "./defaults";
 
 /** What the browser build the agent asks for changes, for the bar that offers
  *  it. One sentence for every build told a Mac being offered 0.3.8 about a
@@ -83,6 +84,17 @@ export function App() {
   const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(() => {
     try {
       return localStorage.getItem("fury.update.dismissed");
+    } catch {
+      return null;
+    }
+  });
+  // The team server's version against the newest release, for the people
+  // who can update it: owners and admins of a server that is not ours. The
+  // tester who runs his own heard of server updates only when told
+  // (14.10.2026). A server without `server_version` predates 0.4.2.
+  const [dismissedServer, setDismissedServer] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("fury.serverUpdate.dismissed");
     } catch {
       return null;
     }
@@ -979,6 +991,60 @@ export function App() {
             </button>
           </div>
         )}
+
+        {/* The team server behind the newest release. Shown to owners and
+            admins of a server we do not run, once per release; the steps are
+            docs/14-team-server.md, "Обновление". */}
+        {(() => {
+          const latest = (update?.latest ?? update?.current ?? "").replace(/^v/, "");
+          const host = (() => {
+            try {
+              return shell?.server_url ? new URL(shell.server_url).hostname : "";
+            } catch {
+              return "";
+            }
+          })();
+          if (!me || !latest || !host || OUR_SERVERS.includes(host)) return null;
+          if (me.role !== "owner" && me.role !== "admin") return null;
+          if (me.server_version && !versionNewer(latest, me.server_version)) return null;
+          // Without a version the server is older than 0.4.2; only worth
+          // saying once a release that reports one exists.
+          if (!me.server_version && !versionNewer(latest, "0.4.1")) return null;
+          if (dismissedServer === latest) return null;
+          return (
+            <div className="notice" role="status">
+              <div style={{ flex: 1 }}>
+                <strong>
+                  {me.server_version
+                    ? t("app.serverUpdate", { host, version: me.server_version, latest })
+                    : t("app.serverUpdateUnknown", { host, latest })}
+                </strong>
+                <div className="muted" style={{ marginTop: "var(--s-1)" }}>{t("app.serverUpdateHow", { latest })}</div>
+              </div>
+              <button
+                className="ghost"
+                onClick={() =>
+                  void api.openUrl("https://github.com/furyteamtop/fury-antidetect-browser/blob/main/docs/14-team-server.md")
+                }
+              >
+                {t("app.serverUpdateSteps")}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  try {
+                    localStorage.setItem("fury.serverUpdate.dismissed", latest);
+                  } catch {
+                    /* a private window: dismissed for this session only */
+                  }
+                  setDismissedServer(latest);
+                }}
+              >
+                {t("app.updateLater")}
+              </button>
+            </div>
+          );
+        })()}
 
         {/* The right Chrome, an older build of it -- agent/src/main.rs,
             core_stale. Profiles keep launching; this only offers the build

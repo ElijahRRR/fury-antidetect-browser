@@ -440,6 +440,8 @@ export interface Me {
   email: string;
   org_id: string;
   role: "owner" | "admin" | "manager" | "member";
+  /** The team server's own version. Missing on servers before 0.4.2. */
+  server_version?: string;
 }
 
 /** What the shell knows before anyone signs in. */
