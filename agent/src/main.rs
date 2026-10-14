@@ -33,6 +33,7 @@ mod paths;
 mod personas;
 mod relay;
 mod store;
+mod syn_shape;
 mod sync;
 #[cfg(test)]
 mod sync_tests;
@@ -872,6 +873,15 @@ pub fn parse_upstream(url: &str) -> anyhow::Result<Upstream> {
         // socks5 is treated as socks5h unconditionally: local DNS resolution
         // would leak the operator's resolver. See docs/05.
         "socks5" | "socks5h" => Upstream::Socks5 { host, port, auth },
+        // The config rides in the password (`wireguard::url`); host and port
+        // are only the endpoint repeated for display. Windows until a launch
+        // says which persona this is (`Upstream::for_os`): a check has no
+        // persona, and Windows is what most of them are.
+        "wireguard" => {
+            let auth = auth.ok_or_else(|| anyhow::anyhow!("a wireguard:// URL carries its config"))?;
+            let config = wireguard::from_url_secret(&auth.password)?;
+            Upstream::WireGuard(wg_stack::Shared::for_config(config), syn_shape::Os::Windows)
+        }
         other => anyhow::bail!("unsupported proxy scheme {other:?}"),
     })
 }

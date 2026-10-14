@@ -7,6 +7,7 @@ import { useI18n } from "../i18n";
 import { useAsk } from "./Ask";
 import { ProxyForm } from "./ProxyForm";
 import { ProxyPaste } from "./ProxyPaste";
+import { proxyUrl } from "../proxyUrl";
 
 /** The proxies this machine knows about.
  *
@@ -28,11 +29,7 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
 
   /** The URL the single-proxy form would build. In team mode the password is
    *  not here, and check_proxy fetches it by id instead. */
-  const urlOf = (p: LocalProxy) => {
-    // As typed, not percent-encoded: see ProxyForm.
-    const auth = p.username ? `${p.username}:${p.password ?? ""}@` : "";
-    return `${p.kind}://${auth}${p.host}:${p.port}`;
-  };
+  const urlOf = (p: LocalProxy) => proxyUrl(p.kind, p.host, p.port, p.username, p.password);
 
   const checkAll = async () => {
     const list = rows;

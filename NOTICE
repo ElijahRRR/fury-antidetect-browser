@@ -59,6 +59,11 @@ pinned revision from Google at build time, under Chromium's own licence and the
 licences of its many third-party dependencies. Nothing in this repository grants
 any rights to that code.
 
+agent/vendor/smoltcp is smoltcp 0.12.0 (https://github.com/smoltcp-rs/smoltcp),
+copied in under its own 0BSD licence (agent/vendor/smoltcp/LICENSE-0BSD.txt) with
+one change, described in agent/vendor/smoltcp/FURY.md. Its files keep their
+licence; the AGPL notice above does not apply to them.
+
 
 5. WIDEVINE — NOT DISTRIBUTED, AND MUST NOT BE
 -----------------------------------------------

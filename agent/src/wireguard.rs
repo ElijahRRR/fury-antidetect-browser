@@ -43,7 +43,7 @@
 use anyhow::{bail, Result};
 
 /// A parsed `[Interface]` / `[Peer]` pair.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     /// The private key, base64, 32 bytes decoded.
     pub private_key: String,
@@ -58,6 +58,45 @@ pub struct Config {
     pub endpoint: String,
     pub allowed_ips: Vec<String>,
     pub keepalive: Option<u16>,
+}
+
+/// The whole config, carried where a proxy URL carries its password:
+/// `wireguard://wg:<config as unpadded base64url>@<endpoint>`.
+///
+/// Every path a proxy takes to the relay — a stored proxy at launch, the
+/// form's check before saving, a team proxy opened by the desktop shell — hands
+/// the agent a URL, and the config is the secret, so it rides in the secret's
+/// place. base64url because those URLs are built "as typed", never
+/// percent-encoded (see ProxyForm), and its alphabet has no `@`, `:` or `/`
+/// for the parser to split on. The desktop builds the same string
+/// (`desktop/src/proxyUrl.ts`, `commands.rs::proxy_url`).
+pub fn url(conf: &str, host: &str, port: u16) -> String {
+    use base64::Engine;
+    let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(conf.as_bytes());
+    format!("wireguard://wg:{blob}@{host}:{port}")
+}
+
+/// The config back out of the password slot of such a URL.
+pub fn from_url_secret(secret: &str) -> Result<Config> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(secret.trim_end_matches('='))
+        .map_err(|_| anyhow::anyhow!("the WireGuard config in this proxy is damaged (not base64url)"))?;
+    let text = String::from_utf8(raw)
+        .map_err(|_| anyhow::anyhow!("the WireGuard config in this proxy is damaged (not text)"))?;
+    Config::parse(&text)
+}
+
+/// By hand, for the reason `relay::Credentials` is: a derived Debug printed
+/// the private key, and an `Upstream` is logged on every launch.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("private_key", &"…")
+            .field("addresses", &self.addresses)
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Config {
@@ -268,5 +307,25 @@ mod tests {
     fn comments_and_blank_lines_are_not_syntax_errors() {
         let text = format!("# exported by the provider\n\n{}\n\n", conf("0.0.0.0/0"));
         assert!(Config::parse(&text).is_ok());
+    }
+
+    /// The config survives the trip through a proxy URL, and the string is the
+    /// one the desktop builds: `proxyUrl("wireguard", "h", 1, null, "abc")` in
+    /// proxyUrl.ts gives `wireguard://wg:YWJj@h:1`.
+    #[test]
+    fn a_config_rides_in_the_url_and_comes_back_whole() {
+        assert_eq!(url("abc", "h", 1), "wireguard://wg:YWJj@h:1");
+        const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let text = format!(
+            "[Interface]\nPrivateKey = {KEY}\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n\
+             [Peer]\nPublicKey = {KEY}\nEndpoint = vpn.example:51820\nAllowedIPs = 0.0.0.0/0\n"
+        );
+        let u = url(&text, "vpn.example", 51820);
+        assert!(!u.contains(KEY), "the key must not sit in the URL readable");
+        let secret = u.strip_prefix("wireguard://wg:").unwrap().split('@').next().unwrap();
+        assert_eq!(from_url_secret(secret).unwrap(), Config::parse(&text).unwrap());
+        assert!(matches!(crate::parse_upstream(&u).unwrap(), crate::relay::Upstream::WireGuard(..)));
+        // And Debug, which an Upstream is logged with, does not print it.
+        assert!(!format!("{:?}", Config::parse(&text).unwrap()).contains(KEY));
     }
 }

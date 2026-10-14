@@ -69,7 +69,8 @@ pub struct Credential {
 pub struct Proxy {
     pub id: String,
     pub name: String,
-    /// "http" | "https" | "socks5"
+    /// "http" | "https" | "socks5" | "wireguard". For "wireguard" the whole
+    /// .conf is in `password` and host/port are its Endpoint, for display.
     pub kind: String,
     pub host: String,
     pub port: u16,
@@ -109,6 +110,12 @@ pub struct Proxy {
 impl Proxy {
     /// The upstream URL the relay takes.
     pub fn url(&self) -> String {
+        // A WireGuard proxy keeps its whole config where a password goes —
+        // sealed like one here and on a team server — and the URL carries it
+        // the same way (`wireguard::url`).
+        if self.kind == "wireguard" {
+            return crate::wireguard::url(self.password.as_deref().unwrap_or(""), &self.host, self.port);
+        }
         match (&self.username, &self.password) {
             (Some(u), Some(p)) => format!("{}://{u}:{p}@{}:{}", self.kind, self.host, self.port),
             _ => format!("{}://{}:{}", self.kind, self.host, self.port),

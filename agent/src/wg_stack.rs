@@ -115,6 +115,9 @@ struct Resolve {
 /// What a caller sends to the task that owns the stack.
 struct Dial {
     to: SocketAddr,
+    /// The persona's OS: the packets this connection is made of are the
+    /// site's whole view of the machine's TCP (`syn_shape`).
+    os: crate::syn_shape::Os,
     /// The task's end of the duplex pair; the caller keeps the other.
     stream: DuplexStream,
     /// Answered once the connection is up or has failed, so `dial` can report
@@ -197,11 +200,11 @@ impl Stack {
     /// problem and pretending otherwise here would make a resolver appear by
     /// accident, resolving through the machine rather than through the exit —
     /// which is the leak the whole tunnel exists to prevent.
-    pub async fn dial(&self, to: SocketAddr) -> Result<DuplexStream> {
+    pub async fn dial(&self, to: SocketAddr, os: crate::syn_shape::Os) -> Result<DuplexStream> {
         let (mine, theirs) = tokio::io::duplex(RX_BUF);
         let (ready, done) = tokio::sync::oneshot::channel();
         self.dials
-            .send(Dial { to, stream: theirs, ready })
+            .send(Dial { to, os, stream: theirs, ready })
             .await
             .map_err(|_| anyhow::anyhow!("the tunnel is no longer running"))?;
         done.await
@@ -229,6 +232,74 @@ impl Drop for Stack {
         // immediate. A tunnel outliving the profile that opened it is a live
         // exit nobody is using — the same leak `relay` had with its JoinHandle.
         self.task.abort();
+    }
+}
+
+/// The tunnel for one config, shared by everything in this process that uses
+/// that config, and started the first time something dials through it.
+///
+/// Shared because a WireGuard key cannot be in two tunnels at once: the peer
+/// answers whichever endpoint handshook last, so a second tunnel with the same
+/// key — a proxy check while the profile is open, the exit lookup a launch
+/// does right after starting its relay — would take the first one's traffic
+/// away from it mid-page. Weak, so the tunnel ends when its last user does.
+///
+/// Lazy because `parse_upstream` is not async and every caller already has a
+/// URL rather than a config; and a tunnel that is never dialled never sends a
+/// handshake, which is the right amount of traffic for a profile that was
+/// opened and closed.
+pub struct Shared {
+    config: crate::wireguard::Config,
+    stack: tokio::sync::OnceCell<Stack>,
+}
+
+impl Shared {
+    pub fn for_config(config: crate::wireguard::Config) -> std::sync::Arc<Shared> {
+        use std::sync::{Arc, Mutex, OnceLock, Weak};
+        static LIVE: OnceLock<Mutex<Vec<Weak<Shared>>>> = OnceLock::new();
+        let mut live = LIVE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        live.retain(|w| w.strong_count() > 0);
+        if let Some(same) = live.iter().filter_map(Weak::upgrade).find(|s| s.config == config) {
+            return same;
+        }
+        let shared = Arc::new(Shared { config, stack: tokio::sync::OnceCell::new() });
+        live.push(Arc::downgrade(&shared));
+        shared
+    }
+
+    async fn stack(&self) -> Result<&Stack> {
+        self.stack.get_or_try_init(|| Stack::start(&self.config)).await
+    }
+
+    pub async fn resolve(&self, name: &str) -> Result<IpAddr> {
+        self.stack().await?.resolve(name).await
+    }
+
+    pub async fn dial(&self, to: SocketAddr, os: crate::syn_shape::Os) -> Result<DuplexStream> {
+        self.stack().await?.dial(to, os).await
+    }
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("wireguard tunnel")
+    }
+}
+
+/// A local port no live socket in the set is using, at random in `range`.
+fn free_port(sockets: &SocketSet<'_>, range: std::ops::RangeInclusive<u16>) -> u16 {
+    let used: std::collections::HashSet<u16> = sockets
+        .iter()
+        .filter_map(|(_, s)| match s {
+            smoltcp::socket::Socket::Tcp(t) => t.local_endpoint().map(|e| e.port),
+            _ => None,
+        })
+        .collect();
+    loop {
+        let port = rand::Rng::gen_range(&mut rand::thread_rng(), range.clone());
+        if !used.contains(&port) {
+            return port;
+        }
     }
 }
 
@@ -267,24 +338,33 @@ async fn run(
     let mut queries: Vec<(smoltcp::socket::dns::QueryHandle, String, tokio::sync::oneshot::Sender<Result<IpAddr>>)> =
         Vec::new();
     let mut pumps: HashMap<smoltcp::iface::SocketHandle, Pump> = HashMap::new();
-    let mut next_port: u16 = 49152;
+    let mut shaper = crate::syn_shape::Shaper::new();
     let mut packet = Vec::new();
 
     loop {
         tokio::select! {
             // A new connection wanted.
             Some(dial) = dials.recv() => {
-                let socket = tcp::Socket::new(
+                let mut socket = tcp::Socket::new(
                     tcp::SocketBuffer::new(vec![0u8; RX_BUF]),
                     tcp::SocketBuffer::new(vec![0u8; TX_BUF]),
                 );
+                // The scale and the timestamps are promises about every
+                // segment after the SYN, so smoltcp has to make them itself;
+                // the shaper only rearranges what it sends.
+                let os = dial.os;
+                socket.set_window_shift(Some(os.window_shift()));
+                if os.timestamps() {
+                    socket.set_tsval_generator(Some(crate::syn_shape::tsval));
+                }
+                // Random within the OS's own range, like the OS: ports handed
+                // out in order would let a site count our connections.
+                let port = free_port(&sockets, os.ephemeral_ports());
+                shaper.expect(port, os);
                 let handle = sockets.add(socket);
-                // Ephemeral, and wrapping rather than growing: a long-lived
-                // agent that only ever incremented would run out.
-                next_port = next_port.checked_add(1).unwrap_or(49152);
                 let s = sockets.get_mut::<tcp::Socket>(handle);
                 let endpoint = (IpAddress::from(dial.to.ip()), dial.to.port());
-                match s.connect(iface.context(), endpoint, next_port) {
+                match s.connect(iface.context(), endpoint, port) {
                     Ok(()) => {
                         pumps.insert(handle, Pump { stream: dial.stream, ready: Some(dial.ready), out: Vec::new() });
                     }
@@ -309,7 +389,10 @@ async fn run(
             // A datagram from the peer.
             got = tunnel.recv_packet(&mut packet) => {
                 match got {
-                    Ok(true) => wire.inbound.push_back(std::mem::take(&mut packet)),
+                    Ok(true) => {
+                        shaper.inbound(&mut packet);
+                        wire.inbound.push_back(std::mem::take(&mut packet));
+                    }
                     Ok(false) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "the tunnel failed");
@@ -325,7 +408,8 @@ async fn run(
         iface.poll(Instant::now(), &mut wire, &mut sockets);
 
         // Everything smoltcp produced goes into the tunnel.
-        while let Some(out) = wire.outbound.pop_front() {
+        while let Some(mut out) = wire.outbound.pop_front() {
+            shaper.outbound(&mut out);
             if let Err(e) = tunnel.send_packet(&out).await {
                 tracing::warn!(error = %e, "could not send through the tunnel");
                 return;
@@ -525,5 +609,71 @@ mod tests {
         let tx = wire.transmit(Instant::now()).unwrap();
         tx.consume(4, |b| b.copy_from_slice(&[9, 9, 9, 9]));
         assert_eq!(wire.outbound.pop_front().unwrap(), vec![9, 9, 9, 9]);
+    }
+
+    /// The SYN a site receives through a WireGuard profile, end to end: a
+    /// proxy URL as the desktop builds it, `parse_upstream`, the shared
+    /// tunnel, a real handshake with a peer on this machine, and the packet
+    /// as that peer decrypts it — which is what it forwards to the site.
+    ///
+    /// This is how the shapes in `syn_shape` were first seen to be needed
+    /// (14.10.2026: `ttl 64, win 65535, [mss 1380, wscale 1, sackOK, eol]`).
+    #[tokio::test]
+    async fn a_windows_profile_sends_a_windows_syn_through_the_tunnel() {
+        use base64::Engine;
+        use boringtun::noise::{Tunn, TunnResult};
+        use boringtun::x25519::{PublicKey, StaticSecret};
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+
+        let client = StaticSecret::random_from_rng(rand::rngs::OsRng);
+        let server = StaticSecret::random_from_rng(rand::rngs::OsRng);
+        let mut peer = Tunn::new(server.clone(), PublicKey::from(&client), None, None, 7, None);
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let conf = format!(
+            "[Interface]\nPrivateKey = {}\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n\
+             [Peer]\nPublicKey = {}\nEndpoint = 127.0.0.1:{port}\nAllowedIPs = 0.0.0.0/0\n",
+            b64(&client.to_bytes()),
+            b64(PublicKey::from(&server).as_bytes())
+        );
+
+        let url = crate::wireguard::url(&conf, "127.0.0.1", port);
+        let upstream = crate::parse_upstream(&url).unwrap().for_os(crate::syn_shape::Os::Windows);
+        let crate::relay::Upstream::WireGuard(shared, os) = upstream else { panic!("not WireGuard") };
+        // A second parse while the first is alive is the same tunnel.
+        let crate::relay::Upstream::WireGuard(again, _) = crate::parse_upstream(&url).unwrap() else { panic!() };
+        assert!(std::sync::Arc::ptr_eq(&shared, &again), "two tunnels with one key");
+
+        tokio::spawn(async move {
+            let _ = shared.dial("1.1.1.1:443".parse().unwrap(), os).await;
+            std::future::pending::<()>().await
+        });
+
+        let mut dgram = vec![0u8; 65536];
+        let mut out = vec![0u8; 65536];
+        let syn = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let (n, from) = socket.recv_from(&mut dgram).await.unwrap();
+                let mut input = &dgram[..n];
+                loop {
+                    match peer.decapsulate(Some(from.ip()), input, &mut out) {
+                        TunnResult::WriteToNetwork(d) => socket.send_to(d, from).await.unwrap(),
+                        TunnResult::WriteToTunnelV4(p, _) if p[9] == 6 && p[33] & 0x02 != 0 => return p.to_vec(),
+                        _ => break,
+                    };
+                    input = &[];
+                }
+            }
+        })
+        .await
+        .expect("no SYN came through the tunnel");
+
+        assert_eq!(syn[8], 128, "TTL");
+        assert_ne!(u16::from_be_bytes([syn[4], syn[5]]), 0, "IP ID");
+        assert_eq!(u16::from_be_bytes([syn[34], syn[35]]), 65535, "window");
+        // mss 1380, nop, wscale 8, nop, nop, sackOK
+        assert_eq!(&syn[40..], &[2, 4, 0x05, 0x64, 1, 3, 3, 8, 1, 1, 4, 2]);
+        let local_port = u16::from_be_bytes([syn[20], syn[21]]);
+        assert!(local_port >= 49152, "Windows' ephemeral range, got {local_port}");
     }
 }

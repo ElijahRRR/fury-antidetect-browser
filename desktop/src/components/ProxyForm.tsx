@@ -6,8 +6,10 @@ import { api, type LocalProxy } from "../api";
 import { NetworkReport } from "./NetworkReport";
 import { useI18n } from "../i18n";
 import { spreadPastedProxy } from "../proxyLine";
+import { proxyUrl, wgEndpoint } from "../proxyUrl";
+import { WireGuardConf } from "./WireGuardConf";
 
-const KINDS = ["socks5", "http", "https"] as const;
+const KINDS = ["socks5", "http", "https", "wireguard"] as const;
 
 /** The proxy fields, as a dialog.
  *
@@ -32,8 +34,19 @@ export function ProxyForm({
   const [sniffed, setSniffed] = useState<string | null>(null);
   /** A type button pressed after the paste outranks what the address said. */
   const kindTouched = useRef(false);
-  const [host, setHost] = useState(editing?.host ?? "");
-  const [port, setPort] = useState(String(editing?.port ?? ""));
+  const [typedHost, setHost] = useState(editing?.host ?? "");
+  const [typedPort, setPort] = useState(String(editing?.port ?? ""));
+  /** A WireGuard proxy's whole .conf. Stored where a password goes. */
+  const [conf, setConf] = useState(editing?.kind === "wireguard" ? (editing.password ?? "") : "");
+  const wg = kind === "wireguard";
+  // For WireGuard the address is the config's Endpoint, not something typed.
+  const endpoint = wg ? wgEndpoint(conf) : null;
+  // On a team server the form never receives the stored config, so an edit
+  // that does not paste a new one keeps the old one (save_proxy reads an
+  // empty secret on an edit as "leave it") and its address.
+  const keepConf = wg && conf.trim() === "" && editing?.kind === "wireguard";
+  const host = wg ? (endpoint?.host ?? (keepConf ? editing!.host : "")) : typedHost;
+  const port = wg ? String(endpoint?.port ?? (keepConf ? editing!.port : "")) : typedPort;
   const [user, setUser] = useState(editing?.username ?? "");
   const [pass, setPass] = useState(editing?.password ?? "");
   const [rotate, setRotate] = useState(editing?.rotate_url ?? "");
@@ -51,15 +64,7 @@ export function ProxyForm({
   /** The address as typed. `k` is passed explicitly when a check follows a
    *  change of protocol in the same click: setKind lands on the next render and
    *  the request would otherwise go out under the kind that just failed. */
-  const url = (k = kind) => {
-    // As typed, not percent-encoded: the agent reads the URL with its own
-    // parser (main.rs parse_upstream), the one launch uses with stored
-    // proxies, and that parser does not decode. Since the check went through
-    // it (d5e7003), a login like "id__cr.us;sessttl.60" reached the proxy
-    // as "id__cr.us%3Bsessttl.60" and was turned away (13.10.2026).
-    const auth = user ? `${user}:${pass}@` : "";
-    return `${k}://${auth}${host.trim()}:${Number(port)}`;
-  };
+  const url = (k = kind) => proxyUrl(k, host, port, user, k === "wireguard" ? conf : pass);
 
   const runCheck = async (k = kind) => {
     setBusy(true);
@@ -93,9 +98,11 @@ export function ProxyForm({
           </div>
 
           <div className="field">
-            <label htmlFor="f-host">{t("px.address")}</label>
+            <label htmlFor={wg ? "f-conf" : "f-host"}>{wg ? t("px.wgConf") : t("px.address")}</label>
             <div>
-              <div className="row">
+              {wg && <WireGuardConf id="f-conf" value={conf} onChange={setConf} />}
+              <div className="row" style={wg ? { marginTop: "var(--s-2)" } : undefined}>
+                {!wg && <>
                 <input id="f-host" value={host} autoFocus placeholder="exit.provider.net"
                   onChange={(e) => setHost(e.target.value)}
                   onPaste={spreadPastedProxy((p) => {
@@ -113,6 +120,7 @@ export function ProxyForm({
                   })} />
                 <input style={{ width: 92 }} value={port} placeholder="1080" inputMode="numeric"
                   onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} />
+                </>}
                 <button style={{ whiteSpace: "nowrap" }} disabled={busy || !complete}
                   onClick={() => runCheck()}>
                   {busy ? t("px.checking") : t("px.checkButton")}
@@ -161,7 +169,7 @@ export function ProxyForm({
             </div>
           </div>
 
-          <div className="field">
+          {!wg && <div className="field">
             <label htmlFor="f-user">{t("px.credentials")}</label>
             <div className="row">
               <input id="f-user" value={user} placeholder={t("px.user")} autoComplete="off"
@@ -169,7 +177,7 @@ export function ProxyForm({
               <input value={pass} placeholder={t("px.password")} type="password" autoComplete="off"
                 onChange={(e) => setPass(e.target.value)} />
             </div>
-          </div>
+          </div>}
 
           <div className="field">
             <label htmlFor="f-name">{t("px.label")}</label>
@@ -181,7 +189,8 @@ export function ProxyForm({
             </div>
           </div>
 
-          <div className="field">
+          {/* A tunnel has no rotation link: its exit is the peer's. */}
+          {!wg && <div className="field">
             <label htmlFor="f-rotate">{t("px.rotate")}</label>
             <div>
               <input id="f-rotate" value={rotate} autoComplete="off"
@@ -189,7 +198,7 @@ export function ProxyForm({
                 onChange={(e) => setRotate(e.target.value)} />
               <p className="hint">{t("px.rotateHint")}</p>
             </div>
-          </div>
+          </div>}
 
           <div className="field">
             <label htmlFor="f-checker">{t("px.checker")}</label>
@@ -215,10 +224,11 @@ export function ProxyForm({
                   id: editing?.id ?? "",
                   name: name.trim() || `${host.trim()}:${port}`,
                   kind, host: host.trim(), port: Number(port),
-                  username: user || null, password: pass || null,
+                  username: wg ? null : (user || null),
+                  password: wg ? (conf || null) : (pass || null),
                   last_country: check?.country ?? editing?.last_country ?? null,
                   last_ip: check?.ip ?? editing?.last_ip ?? null,
-                  rotate_url: rotate.trim() || null,
+                  rotate_url: wg ? null : (rotate.trim() || null),
                   checker_url: checker.trim() || null,
                 });
                 onSaved();

@@ -4,6 +4,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useI18n } from "../i18n";
 import { spreadPastedProxy } from "../proxyLine";
+import { proxyUrl, wgEndpoint } from "../proxyUrl";
+import { WireGuardConf } from "./WireGuardConf";
 import { SUGGESTED } from "../status";
 import { api, type DomainList, type LocalProxy, type MachineOverrides, type Persona, type Preview, type Profile } from "../api";
 import { Logins } from "./Logins";
@@ -184,8 +186,14 @@ export function ProfileDialog({
   // since — see ProxyForm, which does the same.
   const [pxSniffed, setPxSniffed] = useState<string | null>(null);
   const pxKindTouched = useRef(false);
-  const [pxHost, setPxHost] = useState("");
-  const [pxPort, setPxPort] = useState("");
+  const [pxTypedHost, setPxHost] = useState("");
+  const [pxTypedPort, setPxPort] = useState("");
+  /** A WireGuard proxy's .conf; see ProxyForm. */
+  const [pxConf, setPxConf] = useState("");
+  const pxWg = pxKind === "wireguard";
+  const pxEndpoint = pxWg ? wgEndpoint(pxConf) : null;
+  const pxHost = pxWg ? (pxEndpoint?.host ?? "") : pxTypedHost;
+  const pxPort = pxWg ? String(pxEndpoint?.port ?? "") : pxTypedPort;
   const [pxUser, setPxUser] = useState("");
   const [pxPass, setPxPass] = useState("");
   const [pxRotate, setPxRotate] = useState("");
@@ -301,11 +309,11 @@ export function ProfileDialog({
           kind: pxKind,
           host: pxHost.trim(),
           port: Number(pxPort),
-          username: pxUser || null,
-          password: pxPass || null,
+          username: pxWg ? null : (pxUser || null),
+          password: pxWg ? pxConf : (pxPass || null),
           last_country: pxCheck?.country ?? null,
           last_ip: pxCheck?.ip ?? null,
-          rotate_url: pxRotate.trim() || null,
+          rotate_url: pxWg ? null : (pxRotate.trim() || null),
           checker_url: pxChecker.trim() || null,
         }, target === "shared" ? undefined : target);
         useProxyId = saved.id;
@@ -392,15 +400,7 @@ export function ProfileDialog({
     </div>
   );
 
-  const pxUrl = () => {
-    // As typed, not percent-encoded: the agent reads the URL with its own
-    // parser (main.rs parse_upstream), the one launch uses with stored
-    // proxies, and that parser does not decode. Since the check went through
-    // it (d5e7003), a login like "id__cr.us;sessttl.60" reached the proxy
-    // as "id__cr.us%3Bsessttl.60" and was turned away (13.10.2026).
-    const auth = pxUser ? `${pxUser}:${pxPass}@` : "";
-    return `${pxKind}://${auth}${pxHost.trim()}:${Number(pxPort)}`;
-  };
+  const pxUrl = () => proxyUrl(pxKind, pxHost, pxPort, pxUser, pxWg ? pxConf : pxPass);
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -603,7 +603,7 @@ export function ProfileDialog({
                     <div className="field">
                       <label>{t("px.type")}</label>
                       <div className="segmented">
-                        {["socks5", "http", "https"].map((k) => (
+                        {["socks5", "http", "https", "wireguard"].map((k) => (
                           <button key={k} aria-pressed={pxKind === k}
                             onClick={() => { setPxKind(k); pxKindTouched.current = true; setPxSniffed(null); }}>
                             {k}
@@ -614,9 +614,11 @@ export function ProfileDialog({
                     </div>
 
                     <div className="field">
-                      <label htmlFor="px-host">{t("px.address")}</label>
+                      <label htmlFor={pxWg ? "px-conf" : "px-host"}>{pxWg ? t("px.wgConf") : t("px.address")}</label>
                       <div>
-                        <div className="row">
+                        {pxWg && <WireGuardConf id="px-conf" value={pxConf} onChange={setPxConf} />}
+                        <div className="row" style={pxWg ? { marginTop: "var(--s-2)" } : undefined}>
+                          {!pxWg && <>
                           <input
                             id="px-host"
                             value={pxHost}
@@ -643,6 +645,7 @@ export function ProfileDialog({
                             inputMode="numeric"
                             onChange={(e) => setPxPort(e.target.value.replace(/\D/g, ""))}
                           />
+                          </>}
                           <button
                             style={{ whiteSpace: "nowrap" }}
                             disabled={busy || !pxComplete}
@@ -695,7 +698,7 @@ export function ProfileDialog({
                       </div>
                     </div>
 
-                    <div className="field">
+                    {!pxWg && <div className="field">
                       <label htmlFor="px-user">{t("px.credentials")}</label>
                       <div className="row">
                         <input
@@ -713,9 +716,9 @@ export function ProfileDialog({
                           onChange={(e) => setPxPass(e.target.value)}
                         />
                       </div>
-                    </div>
+                    </div>}
 
-                    <div className="field">
+                    {!pxWg && <div className="field">
                       <label htmlFor="px-rotate">{t("px.rotate")}</label>
                       <div>
                         <input
@@ -727,7 +730,7 @@ export function ProfileDialog({
                         />
                         <p className="hint">{t("px.rotateHint")}</p>
                       </div>
-                    </div>
+                    </div>}
 
                     <div className="field">
                       <label htmlFor="px-checker">{t("px.checker")}</label>

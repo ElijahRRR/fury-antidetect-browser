@@ -88,6 +88,25 @@ fn refusal(id: &str, e: &anyhow::Error) -> serde_json::Value {
 /// reqwest's when the proxy was fine and the request after it was not.
 async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: Option<&reqwest::Error>) -> (&'static str, String) {
     use crate::relay::RelayError;
+    // A WireGuard peer does not refuse anything: a wrong key, a revoked config
+    // or a blocked port all look like silence, because the peer drops a
+    // handshake it cannot authenticate without a word. And "try the other
+    // type (socks5 / http)" means nothing for a tunnel.
+    if let crate::relay::Upstream::WireGuard(..) = upstream {
+        if e.is_some_and(|e| e.is_timeout()) {
+            return ("wgSilent", "The WireGuard server did not answer.".into());
+        }
+        return match crate::relay::explain(upstream.clone(), endpoint).await {
+            Some(RelayError::ConnectRejected { reason, .. }) => {
+                ("wgTunnel", format!("The tunnel is up but could not reach the checker ({reason})."))
+            }
+            Some(other) => ("wgTunnel", format!("The tunnel failed ({other}).")),
+            None => match e {
+                Some(e) => reqwest_failure(e),
+                None => ("other", "The check failed: the IP checker answered 502 Bad Gateway.".into()),
+            },
+        };
+    }
     if e.is_some_and(|e| e.is_timeout()) {
         return ("timeout", "The proxy did not answer in time.".into());
     }
@@ -1358,8 +1377,16 @@ impl Agent {
                         anyhow::anyhow!("this proxy has no rotation link")
                     })?;
 
+                // reqwest cannot reach a WireGuard peer; a relay of our own
+                // can, and stops when `_relay` goes at the end of this arm.
+                let (route, _relay) = if proxy.kind == "wireguard" {
+                    let (addr, guard) = crate::relay::loopback(crate::parse_upstream(&proxy.url())?).await?;
+                    (addr, Some(guard))
+                } else {
+                    (proxy.url(), None)
+                };
                 let client = reqwest::Client::builder()
-                    .proxy(reqwest::Proxy::all(&proxy.url())?)
+                    .proxy(reqwest::Proxy::all(&route)?)
                     .timeout(std::time::Duration::from_secs(30))
                     .build()?;
 
@@ -2337,7 +2364,7 @@ impl Agent {
     /// same one and the answer is this machine — asked directly, because there
     /// is nothing in between.
     async fn resolve_exit(
-        url: Option<&str>,
+        upstream: Option<crate::relay::Upstream>,
         checker_url: Option<&str>,
     ) -> anyhow::Result<ExitFacts> {
         let endpoint = checker_url
@@ -2350,8 +2377,8 @@ impl Agent {
         // Through the relay, as the profile's own traffic and the check go:
         // see `relay::via`. Held in `via` until the body is read.
         let timeout = std::time::Duration::from_secs(15);
-        let via = match url {
-            Some(u) => Some(crate::relay::via(crate::parse_upstream(u)?, timeout).await?),
+        let via = match upstream {
+            Some(u) => Some(crate::relay::via(u, timeout).await?),
             None => None,
         };
         let direct;
@@ -2523,8 +2550,34 @@ impl Agent {
             }
         })?;
 
+        // The persona as this profile presents it, with anything the operator
+        // pinned by hand applied and the whole re-validated: an override that
+        // makes an impossible machine is refused here exactly like a bad
+        // catalogue entry, not launched.
+        let persona = crate::personas::load(&profile.persona_id)?;
+        let persona = profile
+            .overrides
+            .apply(&persona, &crate::personas::all())
+            .map_err(|errs| {
+                anyhow::anyhow!(
+                    "the machine settings of this profile describe a machine that does not exist:\n  {}",
+                    errs.join("\n  ")
+                )
+            })?;
+        if let Err(errs) = persona.validate() {
+            anyhow::bail!(
+                "persona {} is inconsistent and would stand out:\n  {}",
+                persona.id,
+                errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n  ")
+            );
+        }
+
         let upstream = match proxy {
-            Some(p) => crate::parse_upstream(&p.url())?,
+            // The persona's OS goes with it: through WireGuard the site's view
+            // of this machine's TCP is ours to make, and it has to be the same
+            // machine the User-Agent describes (`syn_shape`).
+            Some(p) => crate::parse_upstream(&p.url())?
+                .for_os(crate::syn_shape::Os::from_persona(&persona.os.name)),
             // Still through the relay: the blocklist, the start page and the
             // refusal to reach this machine's own services all live there, and
             // a browser pointed straight at the network would have none of them.
@@ -2550,6 +2603,9 @@ impl Agent {
             }
             std::sync::Arc::new(all)
         };
+        // Kept for the exit lookup below, which has to leave the same way —
+        // through WireGuard, the very same tunnel (`wg_stack::Shared`).
+        let exit_upstream = proxy.map(|_| upstream.clone());
         let relay = crate::relay::Relay::new(upstream).blocking(blocked);
         let start_page = relay.start_url();
         let (relay_port, relay_task) = relay.serve(0).await?;
@@ -2566,28 +2622,6 @@ impl Agent {
             "http://127.0.0.1:{relay_port}/{}/probe/",
             start_page.trim_end_matches('/').rsplit('/').next().unwrap_or_default()
         );
-
-        // The persona as this profile presents it, with anything the operator
-        // pinned by hand applied and the whole re-validated: an override that
-        // makes an impossible machine is refused here exactly like a bad
-        // catalogue entry, not launched.
-        let persona = crate::personas::load(&profile.persona_id)?;
-        let persona = profile
-            .overrides
-            .apply(&persona, &crate::personas::all())
-            .map_err(|errs| {
-                anyhow::anyhow!(
-                    "the machine settings of this profile describe a machine that does not exist:\n  {}",
-                    errs.join("\n  ")
-                )
-            })?;
-        if let Err(errs) = persona.validate() {
-            anyhow::bail!(
-                "persona {} is inconsistent and would stand out:\n  {}",
-                persona.id,
-                errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n  ")
-            );
-        }
 
         // A profile that pins neither its timezone nor its languages follows its
         // exit for both, and both come out of one lookup.
@@ -2623,7 +2657,7 @@ impl Agent {
             // where every request from this profile is about to go anyway.
             let exit_started = std::time::Instant::now();
             let resolved = Self::resolve_exit(
-                proxy.map(|p| p.url()).as_deref(),
+                exit_upstream.clone(),
                 proxy.and_then(|p| p.checker_url.as_deref()),
             )
             .await;
@@ -3428,7 +3462,7 @@ mod exit_check_tests {
     #[tokio::test]
     async fn a_dead_proxy_means_no_answer_rather_than_a_direct_one() {
         // Port 9 discards. Nothing is listening for SOCKS5 there.
-        let err = super::Agent::resolve_exit(Some("socks5://127.0.0.1:9"), None)
+        let err = super::Agent::resolve_exit(Some(crate::parse_upstream("socks5://127.0.0.1:9").unwrap()), None)
             .await
             .expect_err("the exit check answered through a proxy that does not exist");
         let msg = err.to_string();

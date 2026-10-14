@@ -193,7 +193,8 @@ pub struct DomainListText {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SealedProxy {
     pub id: Uuid,
-    /// http | https | socks5
+    /// http | https | socks5 | wireguard. For wireguard, host and port are the
+    /// config's Endpoint and the whole .conf is the sealed `password`.
     pub kind: String,
     pub host: String,
     pub port: u16,

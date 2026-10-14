@@ -25,6 +25,13 @@ hmac = "0.12"
 digest = "0.10"
 rand = "0.8"
 
+[patch.crates-io]
+# One small change to smoltcp, the TCP stack inside WireGuard tunnels: the SYN's
+# window scale is set per persona. agent/vendor/smoltcp/FURY.md says what and why.
+# (Inside this section on purpose: tools/ci/gen-deploy-workspace.py copies
+# [workspace.dependencies] up to the next header, comments included.)
+smoltcp = { path = "agent/vendor/smoltcp" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

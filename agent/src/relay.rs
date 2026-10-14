@@ -87,7 +87,9 @@ pub enum Upstream {
     /// the kill-switch simply has no work in this mode.
     Direct,
 
-    /// A WireGuard peer, with the tunnel and its TCP stack already running.
+    /// A WireGuard peer: the tunnel (shared with anything else in the process
+    /// using the same config, see `wg_stack::Shared`) and the OS this
+    /// profile's connections are to look like inside it (`syn_shape`).
     ///
     /// Unlike the other two this is not an address to connect to — it is a
     /// network the agent is already inside. Names are resolved by the peer's
@@ -95,7 +97,7 @@ pub enum Upstream {
     /// reason SOCKS5 is used with SOCKS5h semantics: asking this machine's
     /// resolver what the profile is about to visit is the leak, whatever
     /// carries the bytes afterwards.
-    WireGuard(std::sync::Arc<crate::wg_stack::Stack>),
+    WireGuard(std::sync::Arc<crate::wg_stack::Shared>, crate::syn_shape::Os),
 }
 
 /// How long to wait for the proxy's TCP handshake.
@@ -221,7 +223,7 @@ impl Relay {
             // not a secret, but it is not reached through this struct — and
             // naming the exit is a courtesy, not a contract, so "wireguard" is
             // the honest answer rather than an address dug out for display.
-            Upstream::WireGuard(_) => return "wireguard".to_string(),
+            Upstream::WireGuard(..) => return "wireguard".to_string(),
             // Named on the start page in the plainest words available, because
             // this is the one mode where the answer to "where does this come
             // out" is "here", and an operator who forgot they ticked it should
@@ -410,7 +412,7 @@ impl Relay {
             }
             // No handshake: there is no proxy to greet.
             Upstream::Direct => Ok(Conn::Tcp(connect_upstream(host, port).await?)),
-            Upstream::WireGuard(stack) => {
+            Upstream::WireGuard(stack, os) => {
                 // Resolved INSIDE the tunnel. Doing it out here would hand this
                 // machine's resolver the name of every site the profile is
                 // about to open — which is the leak, whatever carries the bytes
@@ -423,7 +425,7 @@ impl Relay {
                         reason: e.to_string(),
                     })?;
                 let stream = stack
-                    .dial(std::net::SocketAddr::new(addr, port))
+                    .dial(std::net::SocketAddr::new(addr, port), *os)
                     .await
                     .map_err(|e| RelayError::ConnectRejected {
                         target: format!("{host}:{port}"),
@@ -431,6 +433,18 @@ impl Relay {
                     })?;
                 Ok(Conn::Tunnel(stream))
             }
+        }
+    }
+}
+
+impl Upstream {
+    /// The persona this upstream carries, for the one kind where the machine's
+    /// TCP is ours to shape. Through a proxy the site's TCP peer is the proxy
+    /// server, so there is nothing to say and this changes nothing.
+    pub fn for_os(self, os: crate::syn_shape::Os) -> Upstream {
+        match self {
+            Upstream::WireGuard(shared, _) => Upstream::WireGuard(shared, os),
+            other => other,
         }
     }
 }
@@ -472,6 +486,23 @@ pub async fn via(upstream: Upstream, timeout: std::time::Duration) -> anyhow::Re
         .timeout(timeout)
         .build()?;
     Ok(Via { client, task })
+}
+
+/// A loopback proxy address that leaves through `upstream`, for a caller that
+/// builds its own client. reqwest speaks HTTP and SOCKS proxies but not
+/// WireGuard; the relay speaks all three, so a client pointed here does too.
+/// The relay stops when the guard is dropped.
+pub async fn loopback(upstream: Upstream) -> anyhow::Result<(String, Loopback)> {
+    let (port, task) = Relay::new(upstream).reaching_local().serve(0).await?;
+    Ok((format!("http://127.0.0.1:{port}"), Loopback(task)))
+}
+
+pub struct Loopback(tokio::task::JoinHandle<()>);
+
+impl Drop for Loopback {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Why a request through [`via`] failed, in the relay's own words: the relay

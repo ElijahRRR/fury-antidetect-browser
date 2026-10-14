@@ -2095,8 +2095,8 @@ async fn create_proxy(
     if !rbac_guard::may_add_proxies(db.as_mut(), caller.user_id, caller.org_id, caller.role).await? {
         return Err(ApiError::Denied(Perm::EditProxy));
     }
-    if !matches!(req.kind.as_str(), "http" | "https" | "socks5") {
-        return Err(ApiError::BadRequest("kind must be http, https or socks5".into()));
+    if !matches!(req.kind.as_str(), "http" | "https" | "socks5" | "wireguard") {
+        return Err(ApiError::BadRequest("kind must be http, https, socks5 or wireguard".into()));
     }
     if !(1..=65535).contains(&req.port) {
         return Err(ApiError::BadRequest("port must be between 1 and 65535".into()));
@@ -2678,8 +2678,8 @@ async fn edit_proxy(
         Some(rbac_guard::ProxyChange::NoLongerPermitted) => return Err(ApiError::Denied(Perm::EditProxy)),
         Some(rbac_guard::ProxyChange::Allowed) => {}
     }
-    if !matches!(req.kind.as_str(), "http" | "https" | "socks5") {
-        return Err(ApiError::BadRequest("kind must be http, https or socks5".into()));
+    if !matches!(req.kind.as_str(), "http" | "https" | "socks5" | "wireguard") {
+        return Err(ApiError::BadRequest("kind must be http, https, socks5 or wireguard".into()));
     }
     if !(1..=65535).contains(&req.port) || req.host.trim().is_empty() {
         return Err(ApiError::BadRequest("a proxy needs a host and a port".into()));

@@ -2464,6 +2464,22 @@ pub async fn save_proxy(
     }
 }
 
+/// The URL the agent's `parse_upstream` reads. A WireGuard proxy's secret is
+/// its whole .conf, sealed where a password goes, and the URL carries it there
+/// as unpadded base64url: the agent's `wireguard::url` and the interface's
+/// `proxyUrl.ts` build the same string.
+fn proxy_url(kind: &str, host: &str, port: i64, user: Option<String>, pass: Option<String>) -> String {
+    if kind == "wireguard" {
+        use base64::Engine;
+        let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pass.unwrap_or_default());
+        return format!("wireguard://wg:{blob}@{host}:{port}");
+    }
+    match (user, pass) {
+        (Some(u), Some(pw)) => format!("{kind}://{u}:{pw}@{host}:{port}"),
+        _ => format!("{kind}://{host}:{port}"),
+    }
+}
+
 /// The proxy as a URL the agent can dial. In local mode that is what the
 /// interface sent; on a team server the credentials are sealed, so they are
 /// fetched and opened here — the interface never sees a password.
@@ -2510,10 +2526,7 @@ async fn resolve_proxy_url(
 
             let s = |k: &str| sealed.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
             let port = sealed.get("port").and_then(|v| v.as_i64()).unwrap_or(0);
-            match (creds.username, creds.password) {
-                (Some(u), Some(pw)) => format!("{}://{u}:{pw}@{}:{port}", s("kind"), s("host")),
-                _ => format!("{}://{}:{port}", s("kind"), s("host")),
-            }
+            proxy_url(&s("kind"), &s("host"), port, creds.username, creds.password)
         }
     };
     Ok(url)

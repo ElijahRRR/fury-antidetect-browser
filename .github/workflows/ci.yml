@@ -343,7 +343,8 @@ jobs:
           set -euo pipefail
           missing=0
           for f in $(git ls-files '*.rs' '*.ts' '*.tsx' '*.py' '*.sh' \
-                     | grep -v '^core/patches/'); do
+                     | grep -v '^core/patches/' \
+                     | grep -v '^agent/vendor/'); do
             head -5 "$f" | grep -q 'SPDX-License-Identifier' || {
               echo "!! no SPDX header: $f"; missing=1; }
           done

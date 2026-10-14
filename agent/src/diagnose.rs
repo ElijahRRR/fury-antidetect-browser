@@ -91,7 +91,11 @@ pub async fn run(url: &str, checker_url: Option<&str>) -> Report {
             u
         }
         Err(e) => {
-            steps.push(step("parse", false, None, e.to_string(), Some("not_a_proxy")));
+            // A WireGuard config that does not parse is not "not a proxy
+            // address": the address is fine, the pasted file is what is wrong,
+            // and the parser's message says which line.
+            let code = if url.starts_with("wireguard://") { "wg_config" } else { "not_a_proxy" };
+            steps.push(step("parse", false, None, e.to_string(), Some(code)));
             return Report { ok: false, steps, exit: Exit::default(), notes };
         }
     };
@@ -133,8 +137,9 @@ pub async fn run(url: &str, checker_url: Option<&str>) -> Report {
             }
         }
     } else {
-        // WireGuard: there is no host to knock on; the handshake is the tunnel
-        // step and the stack is already up if parse succeeded.
+        // WireGuard: there is no host to knock on (the peer answers nothing
+        // until a valid handshake reaches it); the tunnel step below is the
+        // first that can fail, and it starts the tunnel.
         steps.push(step("reach", true, None, "WireGuard peer configured".into(), None));
     }
 
@@ -146,7 +151,7 @@ pub async fn run(url: &str, checker_url: Option<&str>) -> Report {
         .unwrap_or_else(|| "ipinfo.io".to_string());
     {
         let started = Instant::now();
-        let relay = Relay::new(upstream);
+        let relay = Relay::new(upstream.clone());
         match tokio::time::timeout(Duration::from_secs(20), relay.dial(&target_host, 443)).await {
             Ok(Ok(_)) => steps.push(step("tunnel", true, Some(started), format!("CONNECT {target_host}:443 accepted"), None)),
             Ok(Err(e)) => {
@@ -169,7 +174,7 @@ pub async fn run(url: &str, checker_url: Option<&str>) -> Report {
 
     // 4. exit
     let started = Instant::now();
-    let exit = match fetch_exit(url, &endpoint).await {
+    let exit = match fetch_exit(upstream, &endpoint).await {
         Ok(e) => {
             steps.push(step(
                 "exit",
@@ -251,7 +256,7 @@ fn describe(u: &Upstream) -> String {
         Upstream::Socks5 { host, port, auth } => {
             format!("socks5 proxy {host}:{port}{}", if auth.is_some() { ", with credentials" } else { ", no credentials" })
         }
-        Upstream::WireGuard(_) => "WireGuard tunnel".to_string(),
+        Upstream::WireGuard(..) => "WireGuard tunnel".to_string(),
         Upstream::Direct => "no proxy: this machine's own address".to_string(),
     }
 }
@@ -259,7 +264,7 @@ fn describe(u: &Upstream) -> String {
 fn host_port(u: &Upstream) -> Option<(&str, u16)> {
     match u {
         Upstream::Http { host, port, .. } | Upstream::Socks5 { host, port, .. } => Some((host.as_str(), *port)),
-        Upstream::WireGuard(_) | Upstream::Direct => None,
+        Upstream::WireGuard(..) | Upstream::Direct => None,
     }
 }
 
@@ -305,11 +310,13 @@ fn classify_relay(e: &RelayError, target: &str) -> (&'static str, String) {
     }
 }
 
-async fn fetch_exit(url: &str, endpoint: &str) -> anyhow::Result<Exit> {
+async fn fetch_exit(upstream: crate::relay::Upstream, endpoint: &str) -> anyhow::Result<Exit> {
     let (endpoint, geo_db) = crate::geoip::split_checker(endpoint);
     // Through the profile's own handshake, as the tunnel step above: see
     // `relay::via` for the second SOCKS5 client this used to be.
-    let via = crate::relay::via(crate::parse_upstream(url)?, Duration::from_secs(15)).await?;
+    // The same upstream, not the URL parsed again: for WireGuard that keeps
+    // the step on the tunnel the steps above used (`wg_stack::Shared`).
+    let via = crate::relay::via(upstream, Duration::from_secs(15)).await?;
     let body: serde_json::Value = via.client().get(&endpoint).send().await?.json().await?;
     let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(str::to_string);
     // Same overlay as the check: a pasted database path resolves geo here

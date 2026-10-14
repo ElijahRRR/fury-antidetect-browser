@@ -44,8 +44,18 @@ pub async fn fetch(id: &str, proxy_url: Option<&str>) -> Result<Vec<u8>> {
             "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{} Safari/537.36",
             crate::CHROME_FULL_VERSION
         ));
+    // Held until the download is done: a WireGuard profile's route is a relay
+    // of our own, and it stops when this goes.
+    let mut _relay = None;
     if let Some(p) = proxy_url {
-        b = b.proxy(reqwest::Proxy::all(p).context("the profile's proxy address")?);
+        let p = if p.starts_with("wireguard://") {
+            let (addr, guard) = crate::relay::loopback(crate::parse_upstream(p)?).await?;
+            _relay = Some(guard);
+            addr
+        } else {
+            p.to_string()
+        };
+        b = b.proxy(reqwest::Proxy::all(&p).context("the profile's proxy address")?);
     }
     let res = b.build()?.get(crx_url(id)).send().await.context("reaching the Web Store")?;
     if !res.status().is_success() {
