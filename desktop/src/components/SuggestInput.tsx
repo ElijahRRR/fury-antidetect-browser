@@ -32,10 +32,23 @@ export function SuggestInput({
   const list = useRef<HTMLDivElement>(null);
   const listId = useId();
 
+  // A suggestion with words of its own is shown by them: a stage stored as
+  // "warming" reads "в прогреве" in the field, as it does in the list (the
+  // field used to show the stored word, 14.10.2026). Typing those words
+  // stores the value, so a stage typed by hand is the same stage.
+  const key = value.trim().toLowerCase();
+  const own = suggestions.find((s) => s.label && s.value.toLowerCase() === key);
+  const shownText = own?.label ?? value;
+  const emit = (text: string) => {
+    const t = text.trim().toLowerCase();
+    const match = t ? suggestions.find((s) => (s.label ?? s.value).toLowerCase() === t) : undefined;
+    onChange(match ? match.value : text);
+  };
+
   // Everything while the field shows exactly one of them or nothing, so the
   // list is a menu to pick from; narrowed by what is typed otherwise.
-  const q = value.trim().toLowerCase();
-  const exact = suggestions.some((s) => s.value.toLowerCase() === q);
+  const q = shownText.trim().toLowerCase();
+  const exact = suggestions.some((s) => s.value.toLowerCase() === key);
   const shown = (q && !exact
     ? suggestions.filter((s) => s.value.toLowerCase().includes(q) || (s.label ?? "").toLowerCase().includes(q))
     : suggestions
@@ -90,7 +103,7 @@ export function SuggestInput({
       <input
         ref={input}
         id={id}
-        value={value}
+        value={shownText}
         placeholder={placeholder}
         spellCheck={false}
         autoComplete="off"
@@ -105,7 +118,7 @@ export function SuggestInput({
         }}
         onMouseDown={() => !open && setOpen(true)}
         onChange={(e) => {
-          onChange(e.target.value);
+          emit(e.target.value);
           setActive(-1);
           setOpen(true);
         }}
@@ -151,13 +164,13 @@ export function SuggestInput({
                 id={`${listId}-${i}`}
                 data-index={i}
                 role="option"
-                aria-selected={s.value === value}
+                aria-selected={s.value.toLowerCase() === key}
                 className={"selectOption" + (i === active ? " active" : "")}
                 onMouseMove={() => active !== i && setActive(i)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => choose(i)}
               >
-                <span className="selectCheck">{s.value === value ? "✓" : ""}</span>
+                <span className="selectCheck">{s.value.toLowerCase() === key ? "✓" : ""}</span>
                 <span className="selectLabel">{s.label ?? s.value}</span>
               </div>
             ))}
