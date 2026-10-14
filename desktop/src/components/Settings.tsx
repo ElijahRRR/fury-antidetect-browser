@@ -7,6 +7,7 @@ import { SecondFactor } from "./SecondFactor";
 import { languages, useI18n, type Language } from "../i18n";
 import { type Theme, themes, useTheme } from "../theme";
 import { Select } from "./Select";
+import { DEFAULT_SERVER } from "../defaults";
 
 const TABS = ["general", "team", "data", "about"] as const;
 type Tab = (typeof TABS)[number];
@@ -34,6 +35,7 @@ export function Settings({
   onEnrol,
   onSignup,
   onClose,
+  initialTab,
 }: {
   shell: Shell;
   hasProject: boolean;
@@ -46,16 +48,20 @@ export function Settings({
   onEnrol: () => void;
   onSignup: () => void;
   onClose: () => void;
+  initialTab?: Tab;
 }) {
   const [theme, setTheme] = useTheme();
   const { t, language, setLanguage } = useI18n();
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "general");
   // Prefilled with the server this machine used last. The first screen already
   // does this, and somebody working locally never reaches the first screen --
   // the window opens straight into the profile list, so THIS is where the way
   // back has to be. Reported exactly that way: "открываю лаунчер и он сразу
   // входит, кнопки войти в свой аккаунт нет".
-  const [url, setUrl] = useState(shell.last_server ?? "");
+  // Our server when this machine has used none, as the sign-up and invitation
+  // screens already do: an empty field next to "Connect" left a tester asking
+  // what to type.
+  const [url, setUrl] = useState(shell.last_server ?? DEFAULT_SERVER);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

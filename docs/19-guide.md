@@ -11,14 +11,23 @@ team server is in [14](14-team-server.md) (Russian). Everything else is here.
 After installing, Fury offers **Download the browser**. That is the browser
 your profiles open in, 100 to 150 MB, once. Profiles do not open without it.
 
-Then the sign-in screen, where you choose how you work:
+Then the profile list opens straight away. This is working **without an
+account**: everything stays on this computer, no sign-up, no server, nothing
+leaves. One person needs nothing more.
 
-| Button | What it is | For |
+### A team: sign in, create an account or accept an invitation
+
+All three are in one place. On the left choose **Users** and press **Connect
+a server**. Settings open on the **Team server** tab. The gear at the bottom
+left, next to the computer's name, leads there too.
+
+| What to press there | When | Then |
 |---|---|---|
-| **Work without an account** | Everything stays on this computer. No sign-up, no server, nothing leaves. | One person |
-| **Create an account** | A team on our server; `srv.furybrowser.dev` is filled in. Email, password and a team name; you become its owner. | A team that does not want to run a server |
-| **I have an invitation** | A colleague invited you and sent a code. | A team member |
-| **Sign in** | You already have an account. | |
+| **Connect** (`srv.furybrowser.dev` is filled in) | You already have an account | Email and password |
+| **Create an account**, under the field after "No account yet?" | You are starting a team on our server | Email, password and a team name. You become its owner |
+| **I have an invitation**, next to it | A colleague invited you and sent a code | The code and your own password. Then wait for an owner or admin to let you in |
+
+If your team runs its own server, type its address in the field instead of ours.
 
 All of it is free, alone or as a team.
 
@@ -26,8 +35,9 @@ All of it is free, alone or as a team.
 on your machine and nobody holds a copy, the server included. Put it in a
 password manager right away.
 
-You can move from working alone to a team later: **Settings → Team server**.
-Profiles made on this computer stay.
+Profiles made before connecting stay on the computer, under **On this machine**
+on the left. After signing out of a team account Fury opens on the sign-in
+screen, with the same buttons and **Work without an account**.
 
 ## 2. Profiles
 

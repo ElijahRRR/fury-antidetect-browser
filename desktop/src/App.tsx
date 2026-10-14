@@ -194,6 +194,10 @@ export function App() {
   const [notice, setNotice] = useState<{ text: string; forProfile: string | null } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Which settings tab opens. "Connect a server" in Users means the team
+   *  tab; it opened on General, one more click away from the only field that
+   *  matters there, and a tester could not find where to sign in (14.10.2026). */
+  const [settingsTab, setSettingsTab] = useState<"general" | "team">("general");
   // Applied at the root before anything renders, so the first paint is already
   // the right theme rather than a flash of the wrong one.
   useTheme();
@@ -553,7 +557,7 @@ export function App() {
 
   const commands: Command[] = [
     { id: "act:new", label: t("cmd.newProfile"), run: () => setEditing(null) },
-    { id: "act:settings", label: t("cmd.settings"), run: () => setSettingsOpen(true) },
+    { id: "act:settings", label: t("cmd.settings"), run: () => { setSettingsTab("general"); setSettingsOpen(true); } },
     { id: "act:trash", label: t("cmd.trash"), run: () => setView("trash") },
   ];
 
@@ -626,7 +630,7 @@ export function App() {
         view={view}
         onView={setView}
         onNewProfile={() => setEditing(null)}
-        onSettings={() => setSettingsOpen(true)}
+        onSettings={() => { setSettingsTab("general"); setSettingsOpen(true); }}
         onRenameProject={async (p) => {
           const name = await ask({
             title: t("proj.rename"),
@@ -1433,7 +1437,7 @@ export function App() {
             local={local}
             serverUrl={shell.server_url}
             onSignOut={signOut}
-            onConnect={() => setSettingsOpen(true)}
+            onConnect={() => { setSettingsTab("team"); setSettingsOpen(true); }}
           />
         )}
 
@@ -1556,6 +1560,7 @@ export function App() {
         {settingsOpen && (
           <Settings
             shell={shell}
+            initialTab={settingsTab}
             hasProject={active !== null}
             onExport={exportProject}
             onImport={importProject}
