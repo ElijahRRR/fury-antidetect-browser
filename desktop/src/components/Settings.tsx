@@ -917,8 +917,9 @@ const PRODUCTS: { name: string; detail: "prod.crm" | "prod.seoPlugin" | "prod.se
     icon: "globe",
     url: "https://chromewebstore.google.com/detail/seo-fury-%E2%80%94-seo-auditor/omkoncaffmikgcdndbnnokjggdmkfkce",
   },
-  // No public page yet; listed so the family is whole, without a link.
-  { name: "FuryMail", detail: "prod.mail", icon: "mail", url: null },
+  // The Mac App Store page without a storefront or a language in it, so it
+  // opens in the reader's own store and language.
+  { name: "FuryMail", detail: "prod.mail", icon: "mail", url: "https://apps.apple.com/app/furymail/id6814842270?mt=12" },
 ];
 
 function Products() {
