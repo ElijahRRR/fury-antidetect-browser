@@ -242,6 +242,85 @@ pub fn installed(root: &Path) -> Vec<Installed> {
 }
 
 // ---------------------------------------------------------------------------
+// Copying an extension together with what it knows
+// ---------------------------------------------------------------------------
+//
+// A tester logged into Bitwarden once per persona and asked why (14.10.2026).
+// Measured the same day with Bitwarden 2026.9.3 on the 155 core: everything
+// the extension knows -- account, tokens, and with the vault timeout at
+// "Never" the key that unlocks it -- sits in
+// `Default/Local Extension Settings/<id>`. That one directory copied into a
+// fresh profile opened logged in, and with "Never" unlocked. Its refresh token
+// is reusable (three refreshes with one token, all 200, never rotated), so the
+// copies do not sign each other out.
+//
+// It works only because the id is pinned to the key (see the top of this
+// file): `chrome.storage` is keyed by the `chrome-extension://<id>` origin,
+// and a copy with a different id would be a different extension reading an
+// empty store.
+
+/// Where an extension keeps its state inside a profile directory, beyond the
+/// unpacked extension itself. Per extension, so they can be copied whole.
+///
+/// `Local Storage`, `Service Worker` and the like are shared by every origin
+/// in one database and cannot be split by extension; no extension measured
+/// keeps a login there.
+fn state_dirs(ext_id: &str) -> [PathBuf; 4] {
+    let default = Path::new("Default");
+    [
+        default.join("Local Extension Settings").join(ext_id),
+        default.join("Sync Extension Settings").join(ext_id),
+        default.join("IndexedDB").join(format!("chrome-extension_{ext_id}_0.indexeddb.leveldb")),
+        default.join("IndexedDB").join(format!("chrome-extension_{ext_id}_0.indexeddb.blob")),
+    ]
+}
+
+/// Copies extension `ext_id` from one profile directory to another, together
+/// with its storage, so the copy is signed in wherever the source is.
+///
+/// The destination's own copy and state are replaced, not merged: two LevelDB
+/// directories mixed file by file are one corrupt database. A state directory
+/// the source does not have is removed from the destination too, so the copy
+/// is the source's state and nothing else. Both browsers must be closed.
+pub fn copy_with_state(src_profile: &Path, dst_profile: &Path, ext_id: &str) -> Result<Installed> {
+    if !fury_shared::extensions::is_id(ext_id) {
+        bail!("{ext_id:?} is not an extension id");
+    }
+    let src_root = src_profile.join(crate::paths::EXTENSIONS_DIR);
+    let dst_root = dst_profile.join(crate::paths::EXTENSIONS_DIR);
+    let source = installed(&src_root)
+        .into_iter()
+        .find(|x| x.id == ext_id)
+        .context("not_installed")?;
+
+    // Any directory in the destination that claims this id goes, whatever it
+    // is called: two directories with one id is two `--load-extension`
+    // entries fighting over one origin.
+    for x in installed(&dst_root).into_iter().filter(|x| x.id == ext_id) {
+        std::fs::remove_dir_all(&x.path).with_context(|| format!("clearing {}", x.path))?;
+    }
+    let dst_dir = dst_root.join(ext_id);
+    if dst_dir.exists() {
+        std::fs::remove_dir_all(&dst_dir).with_context(|| format!("clearing {}", dst_dir.display()))?;
+    }
+    fury_platform::tree::copy_tree_portable(Path::new(&source.path), &dst_dir)
+        .with_context(|| format!("copying {}", source.path))?;
+
+    for rel in state_dirs(ext_id) {
+        let (from, to) = (src_profile.join(&rel), dst_profile.join(&rel));
+        if to.exists() {
+            std::fs::remove_dir_all(&to).with_context(|| format!("clearing {}", to.display()))?;
+        }
+        if from.is_dir() {
+            fury_platform::tree::copy_tree_portable(&from, &to)
+                .with_context(|| format!("copying {}", from.display()))?;
+        }
+    }
+
+    Ok(Installed { path: dst_dir.display().to_string(), ..source })
+}
+
+// ---------------------------------------------------------------------------
 // Just enough ZIP
 // ---------------------------------------------------------------------------
 //
@@ -668,6 +747,51 @@ mod tests {
 
         install(&crx, &dir).unwrap();
         assert!(!dir.join("leftover.js").exists(), "a stale file survived a reinstall");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn copying_carries_the_storage_and_replaces_the_destinations() {
+        let key = b"wallet".to_vec();
+        let id = id_from_key(&key);
+        let crx = crx_with(&key, &stored_zip("manifest.json", br#"{"name":"W","version":"2"}"#), 0);
+        let root = scratch("copy-state");
+        let (src, dst) = (root.join("src"), root.join("dst"));
+        install(&crx, &src.join(crate::paths::EXTENSIONS_DIR).join(&id)).unwrap();
+        let les = Path::new("Default").join("Local Extension Settings").join(&id);
+        std::fs::create_dir_all(src.join(&les)).unwrap();
+        std::fs::write(src.join(&les).join("000003.log"), "signed in").unwrap();
+
+        // The destination already has the extension under another directory
+        // name, its own signed-out storage, and an IndexedDB the source lacks.
+        let old = dst.join(crate::paths::EXTENSIONS_DIR).join("by-hand");
+        install(&crx, &old).unwrap();
+        std::fs::create_dir_all(dst.join(&les)).unwrap();
+        std::fs::write(dst.join(&les).join("000009.ldb"), "signed out").unwrap();
+        let idb = Path::new("Default").join("IndexedDB").join(format!("chrome-extension_{id}_0.indexeddb.leveldb"));
+        std::fs::create_dir_all(dst.join(&idb)).unwrap();
+        // Another origin's database is not this extension's to touch.
+        let site = dst.join("Default").join("IndexedDB").join("https_example.com_0.indexeddb.leveldb");
+        std::fs::create_dir_all(&site).unwrap();
+
+        let got = copy_with_state(&src, &dst, &id).unwrap();
+        assert_eq!(got.id, id);
+        assert!(dst.join(crate::paths::EXTENSIONS_DIR).join(&id).join("manifest.json").is_file());
+        assert!(!old.exists(), "a second directory with the same id was left behind");
+        assert_eq!(std::fs::read_to_string(dst.join(&les).join("000003.log")).unwrap(), "signed in");
+        assert!(!dst.join(&les).join("000009.ldb").exists(), "the two stores were mixed");
+        assert!(!dst.join(&idb).exists(), "state the source does not have survived");
+        assert!(site.is_dir());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn copying_from_a_profile_without_the_extension_says_so() {
+        let root = scratch("copy-missing");
+        let id = id_from_key(b"absent");
+        let err = copy_with_state(&root.join("a"), &root.join("b"), &id).unwrap_err().to_string();
+        assert_eq!(err, "not_installed");
+        assert!(!root.join("b").exists(), "nothing is written when there is nothing to copy");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

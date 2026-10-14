@@ -3537,6 +3537,24 @@ pub async fn all_extensions_with(team: Vec<serde_json::Value>) -> R<serde_json::
     Ok(crate::agent::call("extensions.list_all", serde_json::json!({ "team": team })).await?)
 }
 
+/// One profile's extension, signed in, into others (agent: extensions.copy_with_state).
+///
+/// No team lock is taken: nothing leaves this machine here. The copy reaches
+/// the server when each profile is next opened and closed here, and the agent
+/// marks a team profile so that launch cannot mix the server's storage into it.
+#[tauri::command]
+pub async fn copy_extension_with_state(
+    from_profile_id: String,
+    ext_id: String,
+    profile_ids: Vec<String>,
+) -> R<serde_json::Value> {
+    Ok(crate::agent::call(
+        "extensions.copy_with_state",
+        serde_json::json!({ "from_profile_id": from_profile_id, "ext_id": ext_id, "profile_ids": profile_ids }),
+    )
+    .await?)
+}
+
 #[tauri::command]
 pub async fn remove_extension(profile_id: String, id: String) -> R<serde_json::Value> {
     Ok(crate::agent::call(

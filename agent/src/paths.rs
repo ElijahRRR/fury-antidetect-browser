@@ -116,8 +116,11 @@ pub fn templates_file() -> PathBuf {
 /// State`. A bare `Extensions` would collide with the one Chromium creates for
 /// packed extensions it manages itself.
 pub fn extensions_dir(profile_id: &str) -> PathBuf {
-    profile_dir(profile_id).join("Fury Extensions")
+    profile_dir(profile_id).join(EXTENSIONS_DIR)
 }
+
+/// The name of [`extensions_dir`] inside a profile directory.
+pub const EXTENSIONS_DIR: &str = "Fury Extensions";
 
 /// Where the desktop shell reaches this agent.
 ///

@@ -1205,6 +1205,11 @@ export const api = {
   installExtensionMany: (profileIds: string[], crxB64: string): Promise<{
     extension: Extension | null; installed: string[]; skipped: { id: string; reason: string }[];
   }> => cmd("install_extension_many", { profileIds, crxB64 }),
+  /** One profile's extension with its storage -- so signed in -- into others.
+   *  Every browser involved must be closed; see ext::copy_with_state. */
+  copyExtensionWithState: (fromProfileId: string, extId: string, profileIds: string[]): Promise<{
+    extension: Extension | null; installed: string[]; skipped: { id: string; reason: string }[];
+  }> => cmd("copy_extension_with_state", { fromProfileId, extId, profileIds }),
   removeExtension: (profileId: string, id: string): Promise<unknown> =>
     cmd("remove_extension", { profileId, id }),
   extensionCatalogue: (): Promise<CatalogueEntry[]> => cmd("extension_catalogue"),

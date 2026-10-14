@@ -194,6 +194,7 @@ fn main() {
             commands::extensions,
             commands::install_extension,
             commands::remove_extension,
+            commands::copy_extension_with_state,
             commands::all_extensions,
             commands::install_extension_many,
             commands::extension_catalogue,

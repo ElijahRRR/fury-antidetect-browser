@@ -1114,6 +1114,96 @@ impl Agent {
                 Ok(json!({ "removed": true }))
             }
 
+            // One profile's extension, signed in, into others: the extension
+            // and its storage are copied, so the copies are logged in wherever
+            // the source is. ext::copy_with_state says what was measured.
+            //
+            // Every browser involved must be closed: LevelDB copied from under
+            // a running browser is a snapshot of half a write, and one copied
+            // into a running browser is overwritten on its next flush.
+            //
+            // A team profile takes two more rules, both about the launch that
+            // follows, which pulls the server's bundle and writes it over this
+            // directory file by file (bundle::unpack):
+            //   - it must already be on this machine (`held`). Otherwise that
+            //     first pull writes the server's copy of the same LevelDB over
+            //     ours, and two databases mixed file by file are one corrupt
+            //     database.
+            //   - it is marked unsynced at the version it holds. The next launch
+            //     then keeps the local copy if nobody uploaded since, and if
+            //     somebody did, moves ours aside whole and takes theirs whole --
+            //     never the mix. The next close uploads the copy as usual.
+            "extensions.copy_with_state" => {
+                let from = str_param(&params, "from_profile_id")?;
+                let ext_id = str_param(&params, "ext_id")?;
+                let ids: Vec<String> = params
+                    .get("profile_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                // Ids go into paths: a local id is the store's, a team id must
+                // look like the UUID it is.
+                let is_known = |id: &str| uuid::Uuid::parse_str(id).is_ok();
+                if !is_known(&from) {
+                    anyhow::bail!("{from:?} is not a profile id");
+                }
+                let running = self.running.lock().await;
+                if running.contains_key(&from) {
+                    anyhow::bail!("source_open");
+                }
+                let source = paths::profile_dir(&from);
+                let mut installed = Vec::new();
+                let mut skipped = Vec::new();
+                let mut about: Option<crate::ext::Installed> = None;
+                for id in ids {
+                    if id == from {
+                        continue;
+                    }
+                    if !is_known(&id) {
+                        skipped.push(json!({ "id": id, "reason": "not a profile id" }));
+                        continue;
+                    }
+                    if running.contains_key(&id) {
+                        skipped.push(json!({ "id": id, "reason": "open" }));
+                        continue;
+                    }
+                    let team_held = if self.store.profile(&id).await?.is_some() {
+                        None
+                    } else {
+                        match crate::unsynced::held(&id) {
+                            Some(v) => Some(v),
+                            None => {
+                                skipped.push(json!({ "id": id, "reason": "not_here" }));
+                                continue;
+                            }
+                        }
+                    };
+                    match crate::ext::copy_with_state(&source, &paths::profile_dir(&id), &ext_id) {
+                        Ok(x) => {
+                            // An existing marker already names the version this
+                            // copy grew from; replacing it would forget a session
+                            // that never reached the server.
+                            if let Some(v) = team_held {
+                                if crate::unsynced::base(&id).is_none() {
+                                    crate::unsynced::mark(&id, v);
+                                }
+                            }
+                            about.get_or_insert(x);
+                            installed.push(id);
+                        }
+                        // Not installed in the source is the same answer for
+                        // every target; the batch stops rather than repeating it.
+                        Err(e) if e.to_string() == "not_installed" => anyhow::bail!("not_installed"),
+                        Err(e) => skipped.push(json!({ "id": id, "reason": format!("{e:#}") })),
+                    }
+                }
+                Ok(json!({
+                    "extension": about.map(|x| json!({ "id": x.id, "name": x.name, "version": x.version })),
+                    "installed": installed,
+                    "skipped": skipped,
+                }))
+            }
+
             "proxies.upsert" => {
                 let proxy: Proxy = serde_json::from_value(params)?;
                 Ok(json!({ "id": self.store.upsert_proxy(&proxy).await? }))

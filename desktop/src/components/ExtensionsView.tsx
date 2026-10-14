@@ -20,8 +20,12 @@ import { useI18n } from "../i18n";
  *  B) — the agent does both; this file only asks. Anything not in the list is
  *  reachable by pasting its id or store link. */
 
-/** What the target picker is open for. */
-type Pick = { mode: "file" } | { mode: "store"; id: string; name: string };
+/** What the target picker is open for. `copy` takes the extension from one
+ *  profile together with its storage, so the copies are signed in. */
+type Pick =
+  | { mode: "file" }
+  | { mode: "store"; id: string; name: string }
+  | { mode: "copy"; id: string; name: string; from: string };
 
 const ID_IN_TEXT = /[a-p]{32}/;
 
@@ -66,6 +70,7 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
   /** The agent's reasons are stable names; the sentence is ours. */
   const reason = (r: string) => {
     if (r === "proxy_missing") return t("exv.reason.proxy_missing");
+    if (r === "not_here") return t("exv.reason.not_here");
     if (r.startsWith("id_mismatch:")) return t("exv.reason.id_mismatch");
     if (r.startsWith("fetch:")) return t("exv.reason.fetch", { detail: r.slice(6) });
     if (r.startsWith("in_use:")) {
@@ -140,6 +145,40 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
     }
   };
 
+  const copyWithState = async (p: Extract<Pick, { mode: "copy" }>) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const r = await api.copyExtensionWithState(p.from, p.id, [...targets].filter((x) => x !== p.from));
+      const skippedOpen = r.skipped.filter((s) => s.reason === "open").length;
+      const others = r.skipped.filter((s) => s.reason !== "open");
+      setNote(
+        [
+          t("exv.copied", { name: r.extension?.name ?? p.name, n: r.installed.length }),
+          skippedOpen > 0 ? t("exv.skippedOpen", { n: skippedOpen }) : "",
+          others.length > 0 ? others.map((s) => `${nameOf(s.id)}: ${reason(s.reason)}`).join("; ") : "",
+          r.installed.some(isTeam) ? t("exv.teamNote") : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      setPicking(null);
+      await load();
+    } catch (e) {
+      const text = say(e);
+      setError(
+        text.includes("source_open")
+          ? t("exv.err.sourceOpen", { name: nameOf(p.from) })
+          : text.includes("not_installed")
+            ? t("exv.err.notInSource", { name: nameOf(p.from) })
+            : text,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const nameOf = (id: string) => profiles.find((p) => p.id === id)?.name ?? id;
   const carriers = (extId: string) => rows?.find((x) => x.id === extId)?.profiles.length ?? 0;
   const targetsWithoutProxy = [...targets].filter((id) => {
@@ -164,9 +203,25 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
 
       {picking && (
         <div className="notice" style={{ display: "block" }}>
-          <p style={{ margin: "0 0 var(--s-2)" }}>{t("exv.pickTargets", { n: targets.size })}</p>
+          {picking.mode === "copy" && (
+            <div className="row" style={{ marginBottom: "var(--s-2)" }}>
+              <span>{t("exv.copyFrom")}</span>
+              <select
+                value={picking.from}
+                onChange={(e) => setPicking({ ...picking, from: e.target.value })}
+                style={{ width: "auto" }}
+              >
+                {(rows?.find((x) => x.id === picking.id)?.profiles ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>{nameOf(p.id)}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <p style={{ margin: "0 0 var(--s-2)" }}>
+            {t("exv.pickTargets", { n: picking.mode === "copy" ? [...targets].filter((x) => x !== picking.from).length : targets.size })}
+          </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2) var(--s-4)", marginBottom: "var(--s-3)" }}>
-            {eligible.map((p) => (
+            {eligible.filter((p) => picking.mode !== "copy" || p.id !== picking.from).map((p) => (
               <label key={p.id} className="row">
                 <input
                   type="checkbox"
@@ -207,13 +262,23 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
                   {busy ? t("ck.working") : t("exv.chooseFile", { n: targets.size })}
                 </button>
               </>
-            ) : (
+            ) : picking.mode === "store" ? (
               <button
                 className="primary"
                 disabled={busy || targets.size === 0}
                 onClick={() => void installStore(picking.id, picking.name)}
               >
                 {busy ? t("ck.working") : t("exv.storeTarget", { name: picking.name, n: targets.size })}
+              </button>
+            ) : (
+              <button
+                className="primary"
+                disabled={busy || [...targets].filter((x) => x !== picking.from).length === 0}
+                onClick={() => void copyWithState(picking)}
+              >
+                {busy
+                  ? t("ck.working")
+                  : t("exv.copyTarget", { name: picking.name, n: [...targets].filter((x) => x !== picking.from).length })}
               </button>
             )}
             <button className="ghost" disabled={busy} onClick={() => setPicking(null)}>{t("ui.cancel")}</button>
@@ -222,6 +287,7 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
             <p className="hint warn">{t("exv.noProxyWarn", { n: targetsWithoutProxy })}</p>
           )}
           {picking.mode === "file" && <p className="hint">{t("ext.hint")}</p>}
+          {picking.mode === "copy" && <p className="hint" style={{ maxWidth: 720 }}>{t("exv.copyHint")}</p>}
         </div>
       )}
 
@@ -333,6 +399,20 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
                     )}
                   </td>
                   <td className="actions">
+                    <button
+                      className="ghost"
+                      disabled={busy || eligible.length < 2}
+                      title={t("exv.copyWithLoginTitle")}
+                      onClick={() => {
+                        // From a profile that is not open, if there is one: an
+                        // open source is refused, and starting there is a click
+                        // the operator would only have to undo.
+                        const from = x.profiles.find((p) => !profiles.find((q) => q.id === p.id)?.running) ?? x.profiles[0];
+                        setPicking({ mode: "copy", id: x.id, name: x.name, from: from.id });
+                      }}
+                    >
+                      {t("exv.copyWithLogin")}
+                    </button>
                     <button
                       className="ghost danger"
                       disabled={busy}
