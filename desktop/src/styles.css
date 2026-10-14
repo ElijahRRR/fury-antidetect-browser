@@ -1948,3 +1948,14 @@ button.dateDay.chosen:hover {
   padding-top: var(--s-2);
   border-top: 1px solid var(--line);
 }
+
+/* The trash's explanation, and beside it the one button that acts on all of
+   it. Wraps under the text on a narrow window instead of squeezing it. */
+.trashHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}

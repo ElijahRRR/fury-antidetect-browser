@@ -18,6 +18,9 @@ export function Trash({ onChanged }: { onChanged: () => void }) {
   const [rows, setRows] = useState<Profile[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // What emptying the trash could not remove. Not `error`, which replaces
+  // the whole list: the rows that stayed are the ones the person needs to see.
+  const [notice, setNotice] = useState<string | null>(null);
   const { ask, dialog } = useAsk();
 
   const load = useCallback(async () => {
@@ -52,12 +55,67 @@ export function Trash({ onChanged }: { onChanged: () => void }) {
     );
   }
 
+  // Everything at once, one confirmation for all of it. Each row still goes
+  // through the same purge as its own button, so a team profile this account
+  // may not delete is refused by the server and the rest are not held up by
+  // it: the ones that failed stay in the list, and the count says how many.
+  // The server asks for a code before the first purge at most; it does not
+  // ask again for ten minutes (docs/16 5.32), so the rest go straight through.
+  const purgeAll = async () => {
+    const go = await ask({
+      title: t("trash.purgeAll"),
+      detail: t("trash.confirmPurgeAll", { n: rows.length }),
+      confirmLabel: t("ui.deleteForGood"),
+      danger: true,
+    });
+    if (go === null) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    let failed = 0;
+    let firstError: unknown = null;
+    try {
+      for (const p of rows) {
+        try {
+          // `true` rather than the purge's own answer, so that null can only
+          // mean the code was not given -- then stop rather than ask again
+          // for every row.
+          const done = await withStepUp(ask, t, async () => {
+            await api.purgeProfile(p.id, p.origin);
+            return true;
+          });
+          if (done === null) break;
+        } catch (e) {
+          failed += 1;
+          firstError ??= e;
+        }
+      }
+    } finally {
+      await load();
+      onChanged();
+      setBusy(false);
+    }
+    if (failed > 0) {
+      setNotice(t("trash.purgeAllFailed", { n: failed, reason: say(firstError) }));
+    }
+  };
+
   return (
     <>
       {dialog}
-      <p className="hint" style={{ marginTop: 0, marginBottom: "var(--s-3)" }}>
-        {t("trash.hint")}
-      </p>
+      <div className="trashHead">
+        <p className="hint" style={{ margin: 0 }}>
+          {t("trash.hint")}
+        </p>
+        <button className="danger" disabled={busy} onClick={() => void purgeAll()}>
+          {t("trash.purgeAll")}
+        </button>
+      </div>
+      {notice && (
+        <div className="notice warnBar" role="status" style={{ marginBottom: "var(--s-3)" }}>
+          {notice}
+        </div>
+      )}
       <div className="tableWrap">
         <table className="grid">
           <thead>
