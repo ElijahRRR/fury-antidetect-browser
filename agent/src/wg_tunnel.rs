@@ -184,6 +184,14 @@ impl Tunnel {
         }
     }
 
+    /// Whether the peer has ever completed a handshake with us. A peer that
+    /// does not accept our key does not refuse: it drops the initiation and
+    /// says nothing, so this is the only way to tell "wrong key" from "the
+    /// tunnel works and something past it does not".
+    pub fn handshaken(&self) -> bool {
+        self.tunn.stats().0.is_some()
+    }
+
     /// Re-keys and sends keepalives. Call about four times a second.
     ///
     /// Not optional and not a nicety: without it a session expires after about

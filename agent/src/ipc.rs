@@ -92,8 +92,13 @@ async fn check_failure(upstream: &crate::relay::Upstream, endpoint: &str, e: Opt
     // or a blocked port all look like silence, because the peer drops a
     // handshake it cannot authenticate without a word. And "try the other
     // type (socks5 / http)" means nothing for a tunnel.
-    if let crate::relay::Upstream::WireGuard(..) = upstream {
-        if e.is_some_and(|e| e.is_timeout()) {
+    if let crate::relay::Upstream::WireGuard(tunnel, _) = upstream {
+        // Asked of the tunnel rather than read off the error: the resolver
+        // inside the tunnel gives up before the check's own timeout, so a
+        // silent peer used to come back as "the tunnel is up, check DNS" —
+        // measured on the 0.3.18 release agent against a port that never
+        // answers (14.10.2026).
+        if !tunnel.answered() {
             return ("wgSilent", "The WireGuard server did not answer.".into());
         }
         return match crate::relay::explain(upstream.clone(), endpoint).await {

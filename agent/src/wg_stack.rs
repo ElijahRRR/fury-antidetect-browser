@@ -127,6 +127,8 @@ struct Dial {
 
 /// A running tunnel with a TCP stack on it.
 pub struct Stack {
+    /// Set once the peer has answered a handshake (`Tunnel::handshaken`).
+    answered: std::sync::Arc<std::sync::atomic::AtomicBool>,
     dials: tokio::sync::mpsc::Sender<Dial>,
     resolves: tokio::sync::mpsc::Sender<Resolve>,
     task: tokio::task::JoinHandle<()>,
@@ -171,8 +173,9 @@ impl Stack {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Dial>(32);
         let (rtx, rrx) = tokio::sync::mpsc::channel::<Resolve>(32);
-        let task = tokio::spawn(run(tunnel, addr, prefix, servers, rx, rrx));
-        Ok(Stack { dials: tx, resolves: rtx, task })
+        let answered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task = tokio::spawn(run(tunnel, addr, prefix, servers, answered.clone(), rx, rrx));
+        Ok(Stack { answered, dials: tx, resolves: rtx, task })
     }
 
     /// Resolves a name using the peer's resolvers, inside the tunnel.
@@ -275,6 +278,12 @@ impl Shared {
         self.stack().await?.resolve(name).await
     }
 
+    /// Whether the peer has ever answered this tunnel's handshake. False for a
+    /// tunnel nothing has dialled yet.
+    pub fn answered(&self) -> bool {
+        self.stack.get().is_some_and(|s| s.answered.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     pub async fn dial(&self, to: SocketAddr, os: crate::syn_shape::Os) -> Result<DuplexStream> {
         self.stack().await?.dial(to, os).await
     }
@@ -308,6 +317,7 @@ async fn run(
     addr: IpAddr,
     prefix: u8,
     servers: Vec<IpAddress>,
+    answered: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mut dials: tokio::sync::mpsc::Receiver<Dial>,
     mut resolves: tokio::sync::mpsc::Receiver<Resolve>,
 ) {
@@ -388,6 +398,9 @@ async fn run(
 
             // A datagram from the peer.
             got = tunnel.recv_packet(&mut packet) => {
+                if tunnel.handshaken() {
+                    answered.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 match got {
                     Ok(true) => {
                         shaper.inbound(&mut packet);
@@ -644,6 +657,8 @@ mod tests {
         let crate::relay::Upstream::WireGuard(again, _) = crate::parse_upstream(&url).unwrap() else { panic!() };
         assert!(std::sync::Arc::ptr_eq(&shared, &again), "two tunnels with one key");
 
+        assert!(!shared.answered(), "nothing has dialled yet");
+        let watched = shared.clone();
         tokio::spawn(async move {
             let _ = shared.dial("1.1.1.1:443".parse().unwrap(), os).await;
             std::future::pending::<()>().await
@@ -675,5 +690,28 @@ mod tests {
         assert_eq!(&syn[40..], &[2, 4, 0x05, 0x64, 1, 3, 3, 8, 1, 1, 4, 2]);
         let local_port = u16::from_be_bytes([syn[20], syn[21]]);
         assert!(local_port >= 49152, "Windows' ephemeral range, got {local_port}");
+
+        // The peer answered the handshake, and the tunnel knows it: this is
+        // what tells a wrong key ("wgSilent") from a working tunnel.
+        assert!(watched.answered(), "the handshake completed but the tunnel did not notice");
+    }
+
+    /// A peer that never answers — a wrong key looks exactly like this — is
+    /// a tunnel that has not been answered, however long the dial waits.
+    #[tokio::test]
+    async fn a_silent_peer_leaves_the_tunnel_unanswered() {
+        const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let conf = format!(
+            "[Interface]\nPrivateKey = {KEY}\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n\
+             [Peer]\nPublicKey = {KEY}\nEndpoint = 127.0.0.1:{port}\nAllowedIPs = 0.0.0.0/0\n"
+        );
+        let shared = Shared::for_config(crate::wireguard::Config::parse(&conf).unwrap());
+        let dial = shared.dial("1.1.1.1:443".parse().unwrap(), crate::syn_shape::Os::Linux);
+        assert!(tokio::time::timeout(std::time::Duration::from_secs(2), dial).await.is_err());
+        let mut buf = [0u8; 256];
+        assert_eq!(silent.recv(&mut buf).await.unwrap(), 148, "a handshake initiation went out");
+        assert!(!shared.answered());
     }
 }
