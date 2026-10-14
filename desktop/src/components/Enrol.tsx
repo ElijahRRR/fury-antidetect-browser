@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { Brand } from "./Brand";
 import { useEffect, useState } from "react";
 import { useI18n, type Key } from "../i18n";
 import { api, type Invitation, type Me } from "../api";
@@ -51,7 +52,10 @@ export function Enrol({
   onCancel,
   /// The server the shell is already pointed at, when it is pointed at one.
   serverUrl,
+  version,
 }: {
+  /** This build's version, shown under the name (Brand). */
+  version?: string;
   onDone: (me: Me) => void;
   onCancel: () => void;
   serverUrl?: string | null;
@@ -164,7 +168,7 @@ export function Enrol({
   if (!invitation) {
     return (
       <form className="login" onSubmit={check}>
-        <h1>Fury</h1>
+        <Brand version={version} />
         <p className="muted center">{t("enrol.intro")}</p>
         <input
           type="text"
@@ -203,7 +207,7 @@ export function Enrol({
     const wait = Math.max(0, Math.ceil((resendAt - now) / 1000));
     return (
       <form className="login" onSubmit={verify}>
-        <h1>Fury</h1>
+        <Brand version={version} />
         <p className="center">
           {t("enrol.joining", {
             email: invitation.email,
@@ -241,7 +245,7 @@ export function Enrol({
 
   return (
     <form className="login" onSubmit={enrol}>
-      <h1>Fury</h1>
+      <Brand version={version} />
       <p className="center">
         {t("enrol.joining", {
           email: invitation.email,

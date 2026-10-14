@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { Brand } from "./Brand";
 import { useState } from "react";
 import { useI18n } from "../i18n";
 import { api, type Shell } from "../api";
@@ -17,7 +18,10 @@ export function ServerSetup({
   onLocal,
   lastServer,
   lastEmail,
+  version,
 }: {
+  /** This build's version, shown under the name (Brand). */
+  version?: string;
   onDone: (shell: Shell) => void;
   /** Somebody arriving with a code from a colleague, which is the commonest way
    *  a second person ever reaches this screen — and the one door it did not
@@ -100,7 +104,7 @@ export function ServerSetup({
 
   return (
     <form className="login" onSubmit={submit}>
-      <h1>Fury</h1>
+      <Brand version={version} />
       {/* The first-run explanation is for a first run. Somebody coming back to
           their own account does not need to be told that Fury is self-hosted
           and that the address below is one offered to people with no server —

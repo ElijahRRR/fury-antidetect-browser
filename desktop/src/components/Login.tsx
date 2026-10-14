@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { Brand } from "./Brand";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api, type Shell } from "../api";
@@ -13,7 +14,10 @@ export function Login({
   unlockFor,
   awaitingKey,
   lastEmail,
+  version,
 }: {
+  /** This build's version, shown under the name (Brand). */
+  version?: string;
   onSuccess: () => void;
   /** There is no registration form, so the only way to a first account is an
    *  invitation — and this screen is where someone holding one arrives. */
@@ -201,7 +205,7 @@ export function Login({
   if (awaitingKey) {
     return (
       <div className="login">
-        <h1>Fury</h1>
+        <Brand version={version} />
         {unlockFor && <p className="center">{unlockFor}</p>}
         {/* First, because it is the one thing on this screen the person can
             do something with: say it to whoever invited them. */}
@@ -234,7 +238,7 @@ export function Login({
 
   return (
     <form className="login" onSubmit={submit}>
-      <h1>Fury</h1>
+      <Brand version={version} />
       {unlockFor && <p className="muted center">{t("auth.unlockWhy")}</p>}
       <input
         type="email"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { Brand } from "./Brand";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
@@ -33,7 +34,10 @@ export function Signup({
   /// questions in a row on the very first screen a new person sees reads as the
   /// application having forgotten the answer — which it had.
   serverUrl,
+  version,
 }: {
+  /** This build's version, shown under the name (Brand). */
+  version?: string;
   onDone: () => void;
   onCancel: () => void;
   serverUrl?: string | null;
@@ -117,7 +121,7 @@ export function Signup({
 
   return (
     <form className="login" onSubmit={allowed ? create : ask}>
-      <h1>Fury</h1>
+      <Brand version={version} />
 
       {/* The address step is skipped when the shell already knows the server,
           and this is what stops it flashing on the way past: the first render

@@ -373,6 +373,7 @@ export function App() {
   if (signingUp) {
     return (
       <Signup
+        version={shell.version}
         onDone={() => {
           setSigningUp(false);
           void api.shell().then(setShell);
@@ -386,6 +387,7 @@ export function App() {
   if (enrolling) {
     return (
       <Enrol
+        version={shell.version}
         onDone={() => {
           setEnrolling(false);
           void api.shell().then(setShell);
@@ -399,6 +401,7 @@ export function App() {
   if (!local && !shell.signed_in) {
     return shell.server_url ? (
       <Login
+        version={shell.version}
         onSuccess={() => void api.shell().then(setShell)}
         onEnrol={() => setEnrolling(true)}
         onSignup={() => setSigningUp(true)}
@@ -407,6 +410,7 @@ export function App() {
       />
     ) : (
       <ServerSetup
+        version={shell.version}
         onDone={setShell}
         onSignup={() => setSigningUp(true)}
         onEnrol={() => setEnrolling(true)}
@@ -426,6 +430,7 @@ export function App() {
   if (!local && !shell.org_key_ready) {
     return (
       <Login
+        version={shell.version}
         onSuccess={() => void api.shell().then(setShell)}
         onEnrol={() => setEnrolling(true)}
         onSignup={() => setSigningUp(true)}
