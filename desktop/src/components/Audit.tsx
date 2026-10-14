@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
 import { Select } from "./Select";
+import { DatePicker } from "./DatePicker";
 
 type Entry = Awaited<ReturnType<typeof api.audit>>[number];
 
@@ -78,8 +79,8 @@ export function Audit() {
         <option value="user.">{t("aud.users")}</option>
       </Select>
       <input placeholder={t("aud.who")} value={actor} onChange={(e) => setActor(e.target.value)} style={{ width: 200 }} />
-      <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 150 }} />
-      <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} style={{ width: 150 }} />
+      <DatePicker value={since} onChange={setSince} placeholder={t("aud.since")} style={{ width: 150 }} />
+      <DatePicker value={until} onChange={setUntil} placeholder={t("aud.until")} style={{ width: 150 }} />
     </div>
   );
 
