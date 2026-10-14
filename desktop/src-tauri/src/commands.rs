@@ -791,6 +791,86 @@ pub async fn invitation(state: State<'_, AppState>, url: String, code: String) -
         .map_err(|e| ApiErr::local(format!("The server answered something unexpected: {e}")))
 }
 
+/// Send the six digits that confirm an invited address (server 0018). Before
+/// anyone has an account, so the address comes with the call, as for
+/// `invitation`. `lang` is the interface's, for the letter.
+#[tauri::command]
+pub async fn invitation_email(state: State<'_, AppState>, url: String, code: String, lang: String) -> R<serde_json::Value> {
+    let base = settings::normalise_server_url(&url).map_err(ApiErr::local)?;
+    let sanitised: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let resp = state
+        .http
+        .post(format!("{base}/v1/auth/enroll/{sanitised}/email"))
+        .json(&serde_json::json!({ "lang": lang }))
+        .send()
+        .await
+        .map_err(|e| ApiErr::local(format!("Could not reach {base}: {e}")))?;
+    unauthenticated_answer(resp).await
+}
+
+/// The six digits in, a one-time proof out, which `enrol` then carries.
+#[tauri::command]
+pub async fn invitation_email_verify(
+    state: State<'_, AppState>,
+    url: String,
+    code: String,
+    email_code: String,
+) -> R<serde_json::Value> {
+    let base = settings::normalise_server_url(&url).map_err(ApiErr::local)?;
+    let sanitised: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let resp = state
+        .http
+        .post(format!("{base}/v1/auth/enroll/{sanitised}/email/verify"))
+        .json(&serde_json::json!({ "email_code": email_code }))
+        .send()
+        .await
+        .map_err(|e| ApiErr::local(format!("Could not reach {base}: {e}")))?;
+    unauthenticated_answer(resp).await
+}
+
+/// A pre-account call's answer: the body, or the server's own message with its
+/// status, so the interface can tell "wrong code" from "expired".
+async fn unauthenticated_answer(resp: reqwest::Response) -> R<serde_json::Value> {
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if status == 404 {
+        return Err(ApiErr::local(
+            "This invitation is not valid. It may have been used already, or expired.",
+        ));
+    }
+    if status >= 400 {
+        return Err(ApiErr {
+            status,
+            message: body
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("The server refused.")
+                .to_string(),
+            body,
+            code: None,
+        });
+    }
+    Ok(body)
+}
+
+/// What a server says about itself before anyone signs in: open sign-ups, and
+/// whether invited addresses are confirmed by email. An old server that does
+/// not know the second answers without it, which reads as no.
+#[tauri::command]
+pub async fn server_info(state: State<'_, AppState>, url: String) -> R<serde_json::Value> {
+    let base = settings::normalise_server_url(&url).map_err(ApiErr::local)?;
+    let resp = state
+        .http
+        .get(format!("{base}/v1/server"))
+        .send()
+        .await
+        .map_err(|e| ApiErr::local(format!("Could not reach {base}: {e}")))?;
+    if !resp.status().is_success() {
+        return Ok(serde_json::json!({}));
+    }
+    Ok(resp.json().await.unwrap_or(serde_json::json!({})))
+}
+
 /// Whether a server takes open sign-ups, asked before anyone has an account.
 ///
 /// Unauthenticated on purpose: the launcher has to know whether to offer the
@@ -903,6 +983,9 @@ pub async fn enrol(
     code: String,
     password: String,
     creates_org: bool,
+    // The proof from `invitation_email_verify`, on a server that confirms the
+    // invited address by email.
+    email_proof: Option<String>,
 ) -> R<Me> {
     let base = settings::normalise_server_url(&url).map_err(ApiErr::local)?;
 
@@ -927,6 +1010,7 @@ pub async fn enrol(
             "kdf_salt": e.kdf_salt,
             "wrapped_ork": e.wrapped_ork,
             "machine_name": settings::machine_name(),
+            "email_proof": email_proof,
         }))
         .send()
         .await

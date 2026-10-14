@@ -13,6 +13,7 @@ mod api;
 mod auth;
 mod enroll;
 mod error;
+mod mail;
 mod rbac_guard;
 mod security;
 #[cfg(test)]
@@ -42,6 +43,9 @@ pub struct AppState {
     pub open_signup: bool,
     /// What one organisation may take from a shared server.
     pub limits: Limits,
+    /// Letters, when `FURY_SMTP_URL` is set: the six digits that confirm an
+    /// invited address (mail.rs). `None` keeps invitations as they were.
+    pub mailer: Option<Arc<mail::Mailer>>,
 }
 
 /// Ceilings, per organisation and per server.
@@ -161,7 +165,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!(limits = %limits.describe(), "sign-ups are by invitation only");
     }
-    let state = Arc::new(AppState { db, open_signup, limits });
+    let mailer = mail::Mailer::from_env()?.map(Arc::new);
+    match &mailer {
+        Some(m) => match m.check().await {
+            Ok(()) => tracing::info!("mail: on, invited addresses are confirmed with a code by email"),
+            Err(e) => tracing::warn!(error = %e, "mail: FURY_SMTP_URL is set but the SMTP server refused; invitations will fail until it answers"),
+        },
+        None => tracing::info!("mail: off (no FURY_SMTP_URL), invited addresses are not confirmed"),
+    }
+    let state = Arc::new(AppState { db, open_signup, limits, mailer });
     let app = Router::new()
         .route("/healthz", get(healthz))
         .merge(api::routes())

@@ -588,6 +588,9 @@ export type Invitation = {
   organization: string;
   role: string;
   creates_org_key: boolean;
+  /** The server sends six digits to `email` and wants them back before the
+   *  account is made (server 0018). Absent on an older server. */
+  email_check?: boolean;
 };
 
 export type UpdateProgress = {
@@ -714,14 +717,25 @@ export const api = {
   signup: (url: string, email: string, password: string, orgName: string): Promise<Me> =>
     cmd<Me>("signup", { url, email, password, orgName }),
 
-  async enrol(url: string, code: string, password: string, createsOrg: boolean): Promise<Me> {
+  async enrol(url: string, code: string, password: string, createsOrg: boolean, emailProof?: string | null): Promise<Me> {
     if (!isDesktop) {
       return Promise.reject(
         new ApiError(0, "Enrolment generates keys in Rust and is desktop-only."),
       );
     }
-    return cmd<Me>("enrol", { url, code, password, createsOrg });
+    return cmd<Me>("enrol", { url, code, password, createsOrg, emailProof: emailProof ?? null });
   },
+
+  /** Ask for the letter with six digits. `sent` false means the last one went
+   *  out under a minute ago: wait `retry_after` seconds. */
+  invitationEmail: (url: string, code: string, lang: string): Promise<{ sent: boolean; retry_after: number }> =>
+    cmd("invitation_email", { url, code, lang }),
+  /** The six digits in, the proof that `enrol` carries out. */
+  invitationEmailVerify: (url: string, code: string, emailCode: string): Promise<{ email_proof: string }> =>
+    cmd("invitation_email_verify", { url, code, emailCode }),
+  /** What a server says before anyone signs in. Empty from an old one. */
+  serverInfo: (url: string): Promise<{ open_signup?: boolean; email_check?: boolean }> =>
+    cmd("server_info", { url }),
 
   /** A sign-in comes back as an identity, or as a challenge when the
    *  organisation wants a code first — then `loginTotp` finishes it. */

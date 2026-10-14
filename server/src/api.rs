@@ -55,6 +55,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/org/members/{user_id}/sessions", axum::routing::delete(crate::security::revoke_member_sessions))
         .route("/v1/auth/enroll", post(complete_enrollment))
         .route("/v1/auth/enroll/{code}", get(peek_enrollment))
+        .route("/v1/auth/enroll/{code}/email", post(enroll_email_send))
+        .route("/v1/auth/enroll/{code}/email/verify", post(enroll_email_verify))
         .route("/v1/auth/signup", post(signup))
         .route("/v1/server", get(server_info))
         .route("/v1/me", get(whoami))
@@ -359,7 +361,173 @@ struct Invitation {
 /// Deliberately nothing else. A server's name, its size, who is on it — all of
 /// that would turn an address into a thing worth scanning for.
 async fn server_info(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(json!({ "open_signup": state.open_signup }))
+    // And whether an invited address is confirmed by email: the person
+    // sending a code is told whether the code alone is enough (mail.rs).
+    Json(json!({ "open_signup": state.open_signup, "email_check": state.mailer.is_some() }))
+}
+
+/// Whether redeeming this invitation takes the six digits from the letter.
+/// Not for an owner's bootstrap code: it is minted at the server's own shell,
+/// by the person it is for.
+fn email_check_applies(state: &AppState, role: &str) -> bool {
+    state.mailer.is_some() && role != "owner"
+}
+
+/// How long the six digits live, how many letters one invitation may send,
+/// how far apart, and how many wrong answers spend a letter's code.
+const EMAIL_CODE_MINUTES: i64 = 15;
+const EMAIL_LETTERS_MAX: i32 = 5;
+const EMAIL_LETTER_GAP_SECS: i64 = 60;
+const EMAIL_ATTEMPTS_MAX: i32 = 5;
+
+/// The stored form of the six digits or of the proof: bound to the invitation
+/// so a hash from one row says nothing about another.
+fn email_secret_hash(enrollment: Uuid, secret: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("{enrollment}:{secret}").as_bytes()).to_vec()
+}
+
+#[derive(Deserialize)]
+struct EmailCodeRequest {
+    /// The language of the newcomer's app, for the letter.
+    #[serde(default)]
+    lang: String,
+}
+
+/// `POST /v1/auth/enroll/{code}/email` -- send six digits to the invited
+/// address. A minute apart and five per invitation, so a code in the wrong
+/// hands cannot be used to flood somebody's inbox.
+async fn enroll_email_send(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    Json(req): Json<EmailCodeRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let Some(mailer) = state.mailer.clone() else {
+        return Err(ApiError::BadRequest("this server does not confirm addresses by email".into()));
+    };
+    let mut tx = state.db.begin().await?;
+    let row: Option<(Uuid, String, Option<String>, Option<Uuid>, String, i32, i64)> = sqlx::query_as(
+        "SELECT id, email::text, org_name, org_id, role::text, email_codes_sent, \
+                CASE WHEN email_code_sent_at IS NULL THEN 0 \
+                     ELSE GREATEST(0, CEIL($2 - EXTRACT(EPOCH FROM now() - email_code_sent_at))) END::bigint \
+         FROM enrollments \
+         WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now() \
+         FOR UPDATE",
+    )
+    .bind(crate::enroll::hash_code(&code))
+    .bind(EMAIL_LETTER_GAP_SECS as f64)
+    .fetch_optional(&mut *tx)
+    .await?;
+    // The same one answer for expired, spent and unknown as the peek gives.
+    let Some((id, email, org_name, org_id, role, sent, wait)) = row else {
+        return Err(ApiError::NotFound);
+    };
+    if !email_check_applies(&state, &role) {
+        return Err(ApiError::BadRequest("this invitation is not confirmed by email".into()));
+    }
+    if wait > 0 {
+        return Ok(Json(json!({ "sent": false, "retry_after": wait })));
+    }
+    if sent >= EMAIL_LETTERS_MAX {
+        return Err(ApiError::BadRequest(
+            "five letters have been sent for this invitation already; ask whoever invited you for a new one".into(),
+        ));
+    }
+
+    let digits = {
+        use rand::Rng;
+        format!("{:06}", rand::rngs::OsRng.gen_range(0..1_000_000u32))
+    };
+    sqlx::query(
+        "UPDATE enrollments SET email_code_hash = $2, \
+                email_code_expires_at = now() + ($3 || ' minutes')::interval, \
+                email_code_attempts = 0, email_code_sent_at = now(), \
+                email_codes_sent = email_codes_sent + 1, email_proof_hash = NULL \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(email_secret_hash(id, &digits))
+    .bind(EMAIL_CODE_MINUTES.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    let org = match (org_name, org_id) {
+        (Some(name), _) => name,
+        (None, Some(org)) => sqlx::query_scalar::<_, String>("SELECT name FROM organizations WHERE id = $1")
+            .bind(org)
+            .fetch_one(&mut *tx)
+            .await?,
+        (None, None) => String::new(),
+    };
+    // Sent before the commit: a letter that did not go out must not use up one
+    // of the five, or the minute's wait.
+    let (subject, body) = crate::mail::email_code_letter(&req.lang, &org, &digits, EMAIL_CODE_MINUTES);
+    if let Err(e) = mailer.send(&email, &subject, body).await {
+        tracing::warn!(error = %e, "could not send an invitation's email code");
+        return Err(ApiError::BadRequest(
+            "the server could not send the letter; try again in a minute, or tell whoever invited you".into(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(Json(json!({ "sent": true, "retry_after": EMAIL_LETTER_GAP_SECS })))
+}
+
+#[derive(Deserialize)]
+struct EmailVerifyRequest {
+    email_code: String,
+}
+
+/// `POST /v1/auth/enroll/{code}/email/verify` -- the six digits in, a one-time
+/// proof out, which `complete_enrollment` then requires. Checked here, before
+/// a password is chosen, so a mistyped code is not found out after the keys
+/// were generated.
+async fn enroll_email_verify(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    Json(req): Json<EmailVerifyRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut tx = state.db.begin().await?;
+    let row: Option<(Uuid, Option<Vec<u8>>, bool, i32)> = sqlx::query_as(
+        "SELECT id, email_code_hash, COALESCE(email_code_expires_at > now(), false), email_code_attempts \
+         FROM enrollments \
+         WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now() \
+         FOR UPDATE",
+    )
+    .bind(crate::enroll::hash_code(&code))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id, stored, live, attempts)) = row else {
+        return Err(ApiError::NotFound);
+    };
+    let Some(stored) = stored.filter(|_| live) else {
+        return Err(ApiError::BadRequest("the code from the letter has expired; send another letter".into()));
+    };
+    if attempts >= EMAIL_ATTEMPTS_MAX {
+        return Err(ApiError::BadRequest("too many wrong codes; send another letter".into()));
+    }
+    let digits: String = req.email_code.chars().filter(|c| c.is_ascii_digit()).collect();
+    if email_secret_hash(id, &digits) != stored {
+        sqlx::query("UPDATE enrollments SET email_code_attempts = email_code_attempts + 1 WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(ApiError::BadRequest("that is not the code from the letter".into()));
+    }
+    let proof = {
+        use rand::RngCore;
+        let mut b = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut b);
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    };
+    // The digits are spent: the proof is what carries the confirmation on.
+    sqlx::query("UPDATE enrollments SET email_proof_hash = $2, email_code_hash = NULL WHERE id = $1")
+        .bind(id)
+        .bind(email_secret_hash(id, &proof))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "email_proof": proof })))
 }
 
 #[derive(Deserialize)]
@@ -562,6 +730,8 @@ async fn peek_enrollment(
         // An owner brings the organisation key into being; everyone else waits
         // to be handed it. The client needs to know which job it has.
         "creates_org_key": role == "owner",
+        // Whether the next step is the six digits from a letter (mail.rs).
+        "email_check": email_check_applies(&state, &role),
     })))
 }
 
@@ -585,6 +755,9 @@ pub struct EnrollRequest {
     wrapped_ork: Option<String>,
     #[serde(default)]
     machine_name: String,
+    /// What `enroll_email_verify` returned, when the server confirms addresses.
+    #[serde(default)]
+    email_proof: Option<String>,
 }
 
 async fn complete_enrollment(
@@ -640,6 +813,25 @@ async fn complete_enrollment(
             "this invitation is not valid — it may have been used already, or expired".into(),
         ));
     };
+
+    if email_check_applies(&state, &role) {
+        let stored: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT email_proof_hash FROM enrollments WHERE id = $1")
+                .bind(enrollment_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let proven = match (stored, req.email_proof.as_deref()) {
+            (Some(stored), Some(proof)) => email_secret_hash(enrollment_id, proof) == stored,
+            _ => false,
+        };
+        if !proven {
+            return Err(ApiError::BadRequest(
+                "this server confirms the invited address by email first. If the app did not ask for \
+                 a code from a letter, update Fury to 0.3.12 or later"
+                    .into(),
+            ));
+        }
+    }
 
     let owner = role == "owner";
     if owner && wrapped_ork.is_none() {

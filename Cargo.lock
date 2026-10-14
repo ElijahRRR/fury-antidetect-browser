@@ -346,6 +346,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1226,6 +1232,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "email-encoding"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "420b9da095f052ea597503e39073b5b3c522f7db933fbac202d91d24492693fd"
+dependencies = [
+ "base64 0.23.1",
+ "memchr",
+]
+
+[[package]]
+name = "email_address"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
+
+[[package]]
 name = "embed-resource"
 version = "3.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1553,6 +1575,7 @@ dependencies = [
  "base64 0.22.1",
  "fury-shared",
  "futures-util",
+ "lettre",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -2100,6 +2123,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link 0.2.1",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2614,6 +2648,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "lettre"
+version = "0.11.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2c646bd5cc763b1087b15493e29a64be6147ba8f19342004fa52048ee596eae"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "email-encoding",
+ "email_address",
+ "fastrand",
+ "futures-io",
+ "futures-util",
+ "hostname",
+ "httpdate",
+ "idna",
+ "mime",
+ "nom",
+ "percent-encoding",
+ "quoted_printable",
+ "rustls",
+ "socket2",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2898,6 +2960,15 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+]
+
+[[package]]
+name = "nom"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -3702,6 +3773,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quoted_printable"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
+
+[[package]]
 name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4001,6 +4078,7 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",

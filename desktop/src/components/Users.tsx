@@ -88,6 +88,17 @@ export function Users({
   // The instructions to send with the code, open under it; and the same
   // copied/failed for the whole text.
   const [sending, setSending] = useState(false);
+  // Whether this server confirms an invited address with a letter (server
+  // 0018). Until it does, a code works for whoever types it first, and the
+  // card under the code says so. Unknown counts as no.
+  const [emailCheck, setEmailCheck] = useState(false);
+  useEffect(() => {
+    if (local || !serverUrl) return;
+    void api
+      .serverInfo(serverUrl)
+      .then((i) => setEmailCheck(!!i.email_check))
+      .catch(() => setEmailCheck(false));
+  }, [local, serverUrl]);
   const [textCopied, setTextCopied] = useState<"copied" | "failed" | null>(null);
 
   /** The server's folders, and only those.
@@ -766,6 +777,9 @@ export function Users({
             </div>
             {copied === "failed" && <div className="small">{t("team.copyFailed")}</div>}
             <div className="muted small">{t("team.codeOnce")}</div>
+            <div className={emailCheck ? "muted small" : "warn small"} style={{ marginTop: "var(--s-1)" }}>
+              {emailCheck ? t("team.codeMailed", { email: code.email }) : t("team.codeBearer")}
+            </div>
             {sending && (() => {
               // Everything the person needs on the other end, in the order
               // the screens ask for it: where to get Fury, which button,
@@ -776,6 +790,7 @@ export function Users({
                 server: (serverUrl ?? "").replace(/\/+$/, ""),
                 code: code.code,
                 hours: code.hours,
+                letter: emailCheck ? t("team.msgLetter", { email: code.email }) : "",
               });
               const subject = t("team.msgSubject");
               return (

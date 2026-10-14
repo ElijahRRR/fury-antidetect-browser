@@ -40,6 +40,9 @@ services:
     environment:
       DATABASE_URL: postgres://fury:${FURY_DB_PASSWORD}@db:5432/fury
       BIND: 0.0.0.0:8901
+      # Mail for confirming invited addresses (docs/13). Empty: off.
+      FURY_SMTP_URL: ${FURY_SMTP_URL:-}
+      FURY_MAIL_FROM: ${FURY_MAIL_FROM:-}
     # Bound to loopback on purpose: put a reverse proxy in front for TLS.
     # Session tokens over plain HTTP on a public interface would be a gift.
     ports:
