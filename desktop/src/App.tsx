@@ -1068,15 +1068,32 @@ export function App() {
                 Making MANY is a different decision and does belong here: it is
                 the one people reach for after the first few profiles, and it
                 acts on the project this toolbar is already filtering. */}
-            <button onClick={() => setBulk(null)}>{t("bp.button")}</button>
-            {/* Into this computer only: a team profile's proxy carries sealed
-                credentials on the server -- see CsvImport. Shown whenever the
-                profiles would land here: local mode, a local project, or no
-                project on a connected shell. It used to follow the shell's
-                mode alone, so a connected shell never showed it, even inside
-                a local project (reported 10.10.2026: "where is the import"). */}
-            {importsHere && <button className="ghost" onClick={() => setCsv(true)}>{t("csv.button")}</button>}
-            {importsHere && <button className="ghost" onClick={() => setGologin(true)}>{t("gl.button")}</button>}
+            {/* The three ways to get many profiles at once, in one menu: three
+                buttons of their own pushed the filters and Refresh onto a
+                second line at an ordinary window width (14.10.2026).
+
+                CSV and the other antidetect import into this computer only: a
+                team profile's proxy carries sealed credentials on the server --
+                see CsvImport. Offered whenever the profiles would land here:
+                local mode, a local project, or no project on a connected shell.
+                It used to follow the shell's mode alone, so a connected shell
+                never showed it, even inside a local project (reported
+                10.10.2026: "where is the import"). */}
+            <Select
+              style={{ width: "auto" }}
+              value=""
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "many") setBulk(null);
+                else if (v === "csv") setCsv(true);
+                else if (v === "antidetect") setGologin(true);
+              }}
+            >
+              <option value="">{t("bar.addMany")}</option>
+              <option value="many">{t("bp.button")}</option>
+              {importsHere && <option value="csv">{t("csv.button")}</option>}
+              {importsHere && <option value="antidetect">{t("gl.button")}</option>}
+            </Select>
             <input
               className="search"
               placeholder={t("bar.search")}

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { IconButton } from "./Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type CatalogueEntry, type ExtensionEverywhere, type Profile, type StoreInstallResult } from "../api";
 import { useI18n } from "../i18n";
@@ -158,9 +159,7 @@ export function ExtensionsView({ profiles }: { profiles: Profile[] }) {
           {t("exv.add")}
         </button>
         <div className="spacer" />
-        <button className="ghost" onClick={() => void load()}>
-          {t("bar.refresh")}
-        </button>
+        <IconButton icon="refresh" label={t("bar.refresh")} onClick={() => void load()} />
       </div>
 
       {picking && (

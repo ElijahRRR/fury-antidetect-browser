@@ -39,6 +39,8 @@ const P = {
   /** Two people: somebody else holds this too. */
   people:
     "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a6 6 0 0 1 12 0M16 5.5a3 3 0 0 1 0 5.8M18 20a5.5 5.5 0 0 0-2-4.2",
+  /** A padlock: who may open this profile -- its access, not its secrets. */
+  lock: "M7 11h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1ZM8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 15v2",
 } as const;
 
 export type IconName = keyof typeof P;

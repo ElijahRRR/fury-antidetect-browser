@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
+import { IconButton } from "./Icon";
 import { useCallback, useEffect, useState } from "react";
 import { api, type LocalProxy, type Profile } from "../api";
 import { useI18n } from "../i18n";
@@ -92,9 +93,7 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
           </span>
         )}
         <div className="spacer" />
-        <button className="ghost" onClick={() => void load()}>
-          {t("bar.refresh")}
-        </button>
+        <IconButton icon="refresh" label={t("bar.refresh")} onClick={() => void load()} />
       </div>
 
       {error && <div className="notice warnBar">{error}</div>}
@@ -142,11 +141,13 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
                   </td>
                   <td className="actions">
                     <div>
-                      <button className="ghost" onClick={() => setEditing(p)}>
-                        {t("row.edit")}
-                      </button>
-                      <button
-                        className="ghost"
+                      {/* The same two icons a profile row has, in the same
+                          places: one table's pencil is every table's pencil. */}
+                      <IconButton icon="pencil" label={t("row.edit")} onClick={() => setEditing(p)} />
+                      <IconButton
+                        icon="trash"
+                        danger
+                        label={t("row.delete")}
                         onClick={async () => {
                           const go = await ask({
                             title: t("row.delete"),
@@ -158,9 +159,7 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
                           await api.deleteProxy(p.id);
                           await load();
                         }}
-                      >
-                        {t("row.delete")}
-                      </button>
+                      />
                     </div>
                   </td>
                 </tr>

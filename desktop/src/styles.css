@@ -327,6 +327,12 @@ textarea {
   font-weight: 560;
 }
 
+/* A profile's name is what the row is found by; it keeps its line, and the
+   columns whose text can wrap (the proxy's note, who holds the lock) wrap. */
+.grid .name {
+  white-space: nowrap;
+}
+
 .tags {
   display: flex;
   flex-wrap: wrap;
@@ -406,6 +412,17 @@ td.actions {
   text-align: right;
 }
 
+/* A profile row's actions stay on one line: Open, then the icons. Wrapped,
+   they made every row two lines tall with the icons split between them
+   (14.10.2026); the other columns, whose text can wrap, give way instead. */
+td.actions > div.rowActions {
+  flex-wrap: nowrap;
+}
+
+td.nowrap {
+  white-space: nowrap;
+}
+
 /* A square, quiet button holding one glyph.
    Sized to the same height as the text buttons beside it so the row does not
    change height when a profile is running and "Open" turns into "Close". The
@@ -451,6 +468,13 @@ button.icon:disabled {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+/* "In use — address, machine" is the one long state: it wraps under its dot
+   rather than holding the column open and squeezing the names. */
+.state.lock {
+  white-space: normal;
+  align-items: baseline;
 }
 
 .state::before {
@@ -1574,8 +1598,11 @@ ol.reportSteps .stepName { color: var(--text-dim); }
 .mark.verdict.block { color: var(--accent); }
 
 /* The account's stage, under the lock state in the Status column. */
+/* Under the lock's state, not glued to its end: inline, "Free" and the badge
+   ran together with no space between them. */
 .stage {
-  display: inline-block;
+  display: block;
+  width: fit-content;
   margin-top: 4px;
   padding: 1px 7px;
   border-radius: 999px;
