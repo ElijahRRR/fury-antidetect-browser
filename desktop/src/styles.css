@@ -1748,30 +1748,40 @@ button.selectBtn {
   text-align: left;
   white-space: nowrap;
   flex-shrink: 1;
+  position: relative;
   cursor: pointer;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
-    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
-  background-position:
-    calc(100% - 16px) calc(50% + 1px),
-    calc(100% - 11px) calc(50% + 1px);
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
 }
 
-/* The chevron restated: the general button:hover rule sets the background
-   shorthand, which would wipe it on hover and while the list is open. */
+/* The chevron is an element of its own, not a background. The general
+   button:hover rule sets the background shorthand, and in the packaged app
+   that reset the size of a background-drawn chevron: on hover its two
+   gradients filled the whole control, a grey box with a big triangle in it
+   (the owner's screenshots, 14.10.2026). */
+button.selectBtn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-dim);
+  border-bottom: 1.5px solid var(--text-dim);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+button.selectBtn[aria-expanded="true"]::after {
+  transform: translateY(-25%) rotate(-135deg);
+}
+
 button.selectBtn:hover:not(:disabled),
 button.selectBtn[aria-expanded="true"] {
   border-color: var(--line-strong);
-  background-color: var(--bg);
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
-    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background: var(--bg);
 }
 
 button.selectBtn:active {
-  background-color: var(--bg);
+  background: var(--bg);
 }
 
 button.selectBtn:focus-visible {
