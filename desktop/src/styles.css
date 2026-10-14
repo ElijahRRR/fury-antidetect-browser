@@ -2006,3 +2006,85 @@ button.dateDay.chosen:hover {
   gap: var(--s-3);
   margin-bottom: var(--s-3);
 }
+
+/* ---- settings: other products ------------------------------------------ */
+
+.devCard {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  /* The same width as the list under it, so the button lines up with the
+     list's links rather than with the window's edge. */
+  max-width: 620px;
+}
+
+.devAvatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-hover), var(--accent));
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.devWho {
+  flex: 1;
+  min-width: 0;
+}
+
+.devName {
+  font-weight: 600;
+}
+
+.devCard button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.productList {
+  max-width: 620px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+
+.productRow {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+}
+
+.productRow + .productRow {
+  border-top: 1px solid var(--line);
+}
+
+.productIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.productText {
+  flex: 1;
+  min-width: 0;
+}
+
+.productName {
+  font-weight: 560;
+}
+
+.productRow button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
