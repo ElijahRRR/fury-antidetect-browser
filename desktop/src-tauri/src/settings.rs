@@ -12,6 +12,15 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// See `Settings::own_public_key`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OwnPublicKey {
+    pub server: String,
+    pub email: String,
+    /// base64, as sent to the server at enrolment.
+    pub key: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     /// Base URL of the Fury server, without a trailing slash. `None` until the
@@ -46,6 +55,14 @@ pub struct Settings {
     /// Not a credential: an address, beside the address that signed in.
     #[serde(default)]
     pub last_server: Option<String>,
+
+    /// This installation's own public key, as generated or opened here, with
+    /// the server and address it belongs to: what the verification code on the
+    /// "waiting to be let in" screen is computed from (crypto::verify_code).
+    /// Kept here rather than asked of the server, because the point of the
+    /// code is to check what the server lists. Not a secret.
+    #[serde(default)]
+    pub own_public_key: Option<OwnPublicKey>,
 
     /// The highest organisation-key generation this machine has accepted. Only
     /// ever moves forward — see AppState::ork_generation.
@@ -87,6 +104,7 @@ impl Settings {
             None => Settings {
                 last_email: None,
                 last_server: None,
+                own_public_key: None,
                 ork_generation: 0,
                 remember_org_key: true,
                 server_url: None,

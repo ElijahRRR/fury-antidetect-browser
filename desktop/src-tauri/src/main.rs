@@ -110,6 +110,8 @@ fn main() {
             commands::download_core,
             commands::set_server,
             commands::invitation,
+            commands::verify_code,
+            commands::own_verify_code,
             commands::invitation_email,
             commands::invitation_email_verify,
             commands::server_info,

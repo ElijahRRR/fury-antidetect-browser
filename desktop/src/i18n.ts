@@ -442,7 +442,7 @@ const en = {
   "team.loading": "Loading the team…",
   "team.how1": "Invite them below. You get a code — send it to them however you like.",
   "team.how2": "They install Fury and press \"I have an invitation\" on the first screen — or, in a copy already running, Settings → Team server → \"I have an invitation\". Then the code and a password of their own. You never see that password, and neither does the server.",
-  "team.how3": "They appear in the list above as waiting. Press \"Let them in\" on their row and tick the folders they should see — that hands over the key and opens only those. Until you do, they can sign in, see the team, and open nothing.",
+  "team.how3": "They appear in the list above as waiting. Press \"Let them in\" on their row, check the verification code with them, and tick the folders they should see — that hands over the key and opens only those. Until you do, they can sign in, see the team, and open nothing.",
   "team.how4": "That is all. Access to a project is managed below: choose the project, add people from the team and tick their permissions.",
   "team.aloneOnServer": "You are the only one here. Invite somebody below and the steps above will have somewhere to happen — the buttons for handing over the key and granting access appear on their row once they have enrolled.",
   "team.people": "People",
@@ -900,7 +900,7 @@ const en = {
     "Written into both fields and shown deliberately. Copy it somewhere safe before you go on — no screen here can show it to you a second time.",
   // The member who has enrolled and holds nothing.
   "auth.awaitingKey":
-    "You are in the team, but the key that opens its data has not been handed to you yet. A password cannot help: the key is sealed to your public key on the machine of whoever holds it, and only they can do that. Ask an owner or admin to open Users and press “Give the key” on your row.",
+    "You are in the team, but the key that opens its data has not been handed to you yet. A password cannot help: the key is sealed to your public key on the machine of whoever holds it, and only they can do that. Ask an owner or admin to open Users and press “Let them in” on your row; they will ask for the code above.",
   "auth.stillNoKey":
     "The password was right — but there is still no key for you on this server. An owner has to hand it over before anything can be opened.",
   "team.noTeamProjects":
@@ -933,9 +933,15 @@ const en = {
     "Member: sees only the projects given to them and does there what their rights allow. Can never give access to others: the server refuses it even if the box is ticked.",
   "team.copyFailed": "The clipboard refused. Select the code above and copy it by hand.",
   "team.send": "Send…",
+  "team.verifyAsk": "Ask {email} privately for the verification code their Fury shows. It must be:",
+  "team.verifyConfirm": "They told me this code",
+  "team.verifyMismatch": "A different code, or no code at all (\"the invitation has already been used\"), means somebody else signed up with this invitation. Do not let them in: press Remove and send a new invitation.",
+  "auth.verifyCodeIs": "Your verification code:",
+  "auth.verifyCodeWhy": "Send it privately to whoever invited you. They check it before letting you in.",
+  "auth.verifyCodeAfterSignIn": "Your verification code appears after you sign out and sign in again with your password.",
   "team.msgLetter": "\n   Then a letter with six digits comes to {email}: type them in too.",
   "team.codeMailed": "To use it, the person also types six digits the server emails to {email}: a code seen by somebody else is no use to them.",
-  "team.codeBearer": "This server does not confirm the address by email, so the code works for whoever types it first. Send it privately, not to a group chat, and before Let in ask the person whether they have signed up.",
+  "team.codeBearer": "This server does not confirm the address by email, so the code works for whoever types it first. Send it privately, not to a group chat. Before Let in you will check the verification code with the person.",
   "team.sendHint": "Instructions for {email}, with the code in them. Check the text and send it whichever way suits:",
   "team.sendMail": "By email",
   "team.sendTelegram": "In Telegram",
@@ -944,7 +950,7 @@ const en = {
   "team.copyTextFailed": "The clipboard refused. Click into the text, select all and copy it by hand.",
   "team.msgSubject": "Invitation to the team in Fury",
   "team.msgBody":
-    "You are invited to a team in Fury, an anti-detect browser.\n\n1. Download Fury: https://furybrowser.dev\n2. On the first screen press “I have an invitation”. If Fury is already running: Settings → Team server → “I have an invitation”.\n3. Server address: {server}\n   Invitation code: {code}{letter}\n4. Choose a password of 12 characters or more and keep it in a password manager. Nobody can reset it, not even whoever runs the server.\n5. When you have signed up, tell me: I will let you in, and the projects will open.\n\nThe code is for {email} only, works once and expires in {hours} hours.",
+    "You are invited to a team in Fury, an anti-detect browser.\n\n1. Download Fury: https://furybrowser.dev\n2. On the first screen press “I have an invitation”. If Fury is already running: Settings → Team server → “I have an invitation”.\n3. Server address: {server}\n   Invitation code: {code}{letter}\n4. Choose a password of 12 characters or more and keep it in a password manager. Nobody can reset it, not even whoever runs the server.\n5. When you have signed up, Fury shows a verification code. Send it to me privately: I will check it, let you in, and the projects will open.\n\nThe code is for {email} only, works once and expires in {hours} hours.",
 
   // shared
   "trash.title": "Trash",
@@ -1533,7 +1539,7 @@ const ru: Record<Key, string> = {
   "team.loading": "Загружаю команду…",
   "team.how1": "Пригласите человека ниже. Появится код — передайте ему любым способом.",
   "team.how2": "Он ставит Fury и на первом же экране жмёт «У меня есть приглашение» — или, если Fury у него уже работает, Настройки → Командный сервер → «У меня есть приглашение». Дальше код и свой пароль. Ни вы, ни сервер этот пароль не увидите.",
-  "team.how3": "Новый участник появится в списке выше с пометкой «ждёт». Нажмите «Впустить» в его строке и отметьте нужные папки: выдастся ключ и откроются только они. До этого можно войти и увидеть команду, но открыть ничего нельзя.",
+  "team.how3": "Новый участник появится в списке выше с пометкой «ждёт». Нажмите «Впустить» в его строке, сверьте с ним код сверки и отметьте нужные папки: выдастся ключ и откроются только они. До этого можно войти и увидеть команду, но открыть ничего нельзя.",
   "team.how4": "Всё. Доступ к проекту меняется ниже: выберите проект, добавьте людей из команды и отметьте им права.",
   "team.aloneOnServer": "Кроме вас тут никого. Пригласите кого-нибудь ниже — и шагам выше будет где произойти: кнопки «Выдать ключ» и «Выдать доступ» появятся в его строке после регистрации.",
   "team.people": "Участники",
@@ -1973,7 +1979,7 @@ const ru: Record<Key, string> = {
     "Вписан в оба поля и показан намеренно. Сохраните его, прежде чем идти дальше, — показать второй раз будет неоткуда.",
   // Участник, который зарегистрировался и не держит ничего.
   "auth.awaitingKey":
-    "Вы в команде, но ключ, которым открываются её данные, вам ещё не выдали. Пароль тут не поможет: ключ заворачивается под ваш открытый ключ на машине того, кто им владеет, и сделать это может только он. Попросите владельца или администратора открыть «Пользователи» и нажать «Выдать ключ» в вашей строке.",
+    "Вы в команде, но ключ, которым открываются её данные, вам ещё не выдали. Пароль тут не поможет: ключ заворачивается под ваш открытый ключ на машине того, кто им владеет, и сделать это может только он. Попросите владельца или администратора открыть «Пользователи» и нажать «Впустить» в вашей строке: он спросит у вас код выше.",
   "auth.stillNoKey":
     "Пароль верный — но ключа для вас на этом сервере всё ещё нет. Пока владелец не выдаст его, открыть будет нечего.",
   "team.noTeamProjects":
@@ -2006,9 +2012,15 @@ const ru: Record<Key, string> = {
     "Участник: видит только выданные ему проекты и делает в них то, что отмечено в его правах. Раздавать доступ другим не может никогда: сервер откажет, даже если галочку поставить.",
   "team.copyFailed": "Буфер обмена не дался. Выделите код выше и скопируйте вручную.",
   "team.send": "Отправить…",
+  "team.verifyAsk": "Спросите у {email} в личке код сверки, который показывает его Fury. Он должен быть таким:",
+  "team.verifyConfirm": "Человек назвал мне этот код",
+  "team.verifyMismatch": "Если код другой или его нет совсем («приглашение уже использовано»), значит, по этому приглашению зарегистрировался кто-то другой. Не впускайте: нажмите «Убрать» и выпустите новое приглашение.",
+  "auth.verifyCodeIs": "Ваш код сверки:",
+  "auth.verifyCodeWhy": "Пришлите его в личку тому, кто вас пригласил. Он сверит его, прежде чем впустить вас.",
+  "auth.verifyCodeAfterSignIn": "Код сверки появится, если выйти и снова войти с паролем.",
   "team.msgLetter": "\n   Потом на {email} придёт письмо с шестью цифрами: введите и их.",
   "team.codeMailed": "Чтобы им воспользоваться, нужно ещё ввести шесть цифр, которые сервер пришлёт на {email}: чужому человеку код сам по себе ничего не даст.",
-  "team.codeBearer": "Этот сервер не подтверждает почту, поэтому код сработает у того, кто введёт его первым. Отправляйте его лично, не в общий чат, а перед «Впустить» спросите человека, зарегистрировался ли он.",
+  "team.codeBearer": "Этот сервер не подтверждает почту, поэтому код сработает у того, кто введёт его первым. Отправляйте его лично, не в общий чат. Перед «Впустить» вы сверите с человеком код сверки.",
   "team.sendHint": "Инструкция для {email}, код уже в ней. Проверьте текст и отправьте, как удобно:",
   "team.sendMail": "Письмом",
   "team.sendTelegram": "В Telegram",
@@ -2017,7 +2029,7 @@ const ru: Record<Key, string> = {
   "team.copyTextFailed": "Буфер обмена не дался. Щёлкните в текст, выделите всё и скопируйте вручную.",
   "team.msgSubject": "Приглашение в команду в Fury",
   "team.msgBody":
-    "Вас пригласили в команду в Fury, антидетект-браузере.\n\n1. Скачайте Fury: https://furybrowser.dev\n2. На первом экране нажмите «У меня есть приглашение». Если Fury уже открыт: Настройки → Командный сервер → «У меня есть приглашение».\n3. Адрес сервера: {server}\n   Код приглашения: {code}{letter}\n4. Придумайте пароль от 12 символов и сохраните его в менеджере паролей. Сбросить его не сможет никто, даже владелец сервера.\n5. Когда зарегистрируетесь, напишите мне: я впущу вас в команду, и откроются проекты.\n\nКод только для {email}, срабатывает один раз и действует {hours} ч.",
+    "Вас пригласили в команду в Fury, антидетект-браузере.\n\n1. Скачайте Fury: https://furybrowser.dev\n2. На первом экране нажмите «У меня есть приглашение». Если Fury уже открыт: Настройки → Командный сервер → «У меня есть приглашение».\n3. Адрес сервера: {server}\n   Код приглашения: {code}{letter}\n4. Придумайте пароль от 12 символов и сохраните его в менеджере паролей. Сбросить его не сможет никто, даже владелец сервера.\n5. После регистрации Fury покажет код сверки. Пришлите его мне в личку: я сверю его, впущу вас в команду, и откроются проекты.\n\nКод только для {email}, срабатывает один раз и действует {hours} ч.",
 
   "trash.title": "Корзина",
   "trash.empty": "Ничего не удалено.",

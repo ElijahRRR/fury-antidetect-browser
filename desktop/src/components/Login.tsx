@@ -51,6 +51,13 @@ export function Login({
   // challenge to answer it against.
   const [challenge, setChallenge] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  // The verification code the person letting us in will ask for, computed
+  // from the key this machine made (crypto::verify_code).
+  const [ownCode, setOwnCode] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!awaitingKey) return;
+    void api.ownVerifyCode().then(setOwnCode, () => setOwnCode(null));
+  }, [awaitingKey]);
   const { t } = useI18n();
 
   const submit = async (e: React.FormEvent) => {
@@ -196,6 +203,18 @@ export function Login({
       <div className="login">
         <h1>Fury</h1>
         {unlockFor && <p className="center">{unlockFor}</p>}
+        {/* First, because it is the one thing on this screen the person can
+            do something with: say it to whoever invited them. */}
+        {ownCode && (
+          <div className="center" style={{ margin: "var(--s-2) 0" }}>
+            <div className="small">{t("auth.verifyCodeIs")}</div>
+            <div className="mono" style={{ fontSize: 26, letterSpacing: 2, margin: "var(--s-1) 0", userSelect: "all" }}>
+              {ownCode}
+            </div>
+            <div className="hint small">{t("auth.verifyCodeWhy")}</div>
+          </div>
+        )}
+        {ownCode === null && <p className="hint small center">{t("auth.verifyCodeAfterSignIn")}</p>}
         <p className="warn small center">{t("auth.awaitingKey")}</p>
         {error && <p className="error center">{error}</p>}
         {waited && <p className="hint">{t("auth.stillWaiting")}</p>}

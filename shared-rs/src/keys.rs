@@ -131,6 +131,11 @@ pub fn new_keypair() -> Keypair {
     }
 }
 
+/// The public half of a keypair, from the private half.
+pub fn public_from_secret(secret: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*secret)).to_bytes()
+}
+
 /// Seal a payload to a public key, with no signature from the sender.
 ///
 /// An ephemeral keypair per message, so the same ORK sealed twice to the same

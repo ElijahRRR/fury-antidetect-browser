@@ -733,6 +733,12 @@ export const api = {
   /** The six digits in, the proof that `enrol` carries out. */
   invitationEmailVerify: (url: string, code: string, emailCode: string): Promise<{ email_proof: string }> =>
     cmd("invitation_email_verify", { url, code, emailCode }),
+  /** Eight digits from a member's public key as the server lists it, to
+   *  compare with what that person's own Fury shows (crypto::verify_code). */
+  verifyCode: (publicKey: string): Promise<string> => cmd<string>("verify_code", { publicKey }),
+  /** This installation's own code, from the key it made or opened itself.
+   *  Null when it has not seen that key (see own_verify_code). */
+  ownVerifyCode: (): Promise<string | null> => cmd<string | null>("own_verify_code"),
   /** What a server says before anyone signs in. Empty from an old one. */
   serverInfo: (url: string): Promise<{ open_signup?: boolean; email_check?: boolean }> =>
     cmd("server_info", { url }),

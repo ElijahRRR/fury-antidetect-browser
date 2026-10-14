@@ -670,6 +670,22 @@ async fn finish_login(state: &State<'_, AppState>, ok: LoginOk, email: &str, pas
         }
     }
 
+    // Waiting to be let in: the one state where the verification code is
+    // shown, and the password is in hand to open our own key for it. Costs a
+    // second key derivation, so only here.
+    if ok.wrapped_ork.is_none() {
+        match crypto::own_public_key(password, &ok.kdf_salt, &ok.wrapped_private_key) {
+            Ok(key) => {
+                let mut s = state.settings.lock().unwrap();
+                if let Some(server) = s.server_url.clone() {
+                    s.own_public_key = Some(settings::OwnPublicKey { server, email: email.to_string(), key });
+                    let _ = s.save(&state.config_dir);
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not open our own key for the verification code"),
+        }
+    }
+
     match crypto::unlock_org_key(password, &ok.kdf_salt, &ok.wrapped_private_key, ok.wrapped_ork.as_deref()) {
         Ok(key) => {
             *state.org_key.lock().unwrap() = key;
@@ -1064,10 +1080,39 @@ pub async fn enrol(
     {
         let mut s = state.settings.lock().unwrap();
         s.last_email = Some(me.email.clone());
+        // What the code on the waiting screen is computed from: the key made
+        // here a moment ago, not what the server will later say it is.
+        s.own_public_key = Some(settings::OwnPublicKey {
+            server: base.clone(),
+            email: me.email.clone(),
+            key: e.public_key.clone(),
+        });
         let _ = s.save(&state.config_dir);
     }
 
     Ok(me)
+}
+
+/// The verification code for a member's public key as the server lists it,
+/// for the owner's "Let them in" dialog (crypto::verify_code).
+#[tauri::command]
+pub fn verify_code(public_key: String) -> R<String> {
+    crypto::verify_code(&public_key).map_err(|e| ApiErr::local(e.to_string()))
+}
+
+/// This installation's own verification code, for the "waiting to be let in"
+/// screen. None when the key it was computed from belongs to another server
+/// or address, or was never seen here (an account made on another machine,
+/// before the next sign-in with the password).
+#[tauri::command]
+pub fn own_verify_code(state: State<'_, AppState>) -> R<Option<String>> {
+    let s = state.settings.lock().unwrap();
+    let Some(own) = s.own_public_key.as_ref() else { return Ok(None) };
+    let current = (s.server_url.as_deref(), s.last_email.as_deref());
+    if current != (Some(own.server.as_str()), Some(own.email.as_str())) {
+        return Ok(None);
+    }
+    crypto::verify_code(&own.key).map(Some).map_err(|e| ApiErr::local(e.to_string()))
 }
 
 #[tauri::command]

@@ -131,6 +131,10 @@ export function Users({
     member: Members["members"][number];
     picked: Set<string>;
     accessRole: string;
+    // The verification code for the key the server lists for them, and
+    // whether the owner has said the person read out the same one.
+    code: string | null;
+    confirmed: boolean;
   } | null>(null);
   // The organisation's domain lists, for attaching to a grant in the row.
   const [orgLists, setOrgLists] = useState<OrgDomainList[]>([]);
@@ -226,6 +230,14 @@ export function Users({
   }
 
   const myRole = team.members.find((m) => m.is_you)?.role;
+
+  const openAdmit = (member: Members["members"][number], picked: Set<string>) => {
+    setAdmitting({ member, picked, accessRole: invitedRole(member.email, roles), code: null, confirmed: false });
+    void api.verifyCode(member.public_key).then(
+      (code) => setAdmitting((a) => (a && a.member.user_id === member.user_id ? { ...a, code } : a)),
+      (e) => setError(say(e)),
+    );
+  };
   const granted = new Set(grants?.granted.map((g) => g.user_id) ?? []);
 
   return (
@@ -262,9 +274,30 @@ export function Users({
               <div className="name" style={{ marginBottom: "var(--s-2)" }}>
                 {t("team.letInTitle", { email: admitting.member.email })}
               </div>
-              <p className="hint" style={{ margin: 0 }}>
-                {t("team.letInPick")}
-              </p>
+              {/* The check that the key about to be trusted is theirs. An
+                  invitation code works for whoever types it first, so the
+                  row alone cannot say who enrolled (14.10.2026). */}
+              <div className="notice" style={{ margin: "0 0 var(--s-3)", display: "block" }}>
+                <div className="small">{t("team.verifyAsk", { email: admitting.member.email })}</div>
+                <div className="mono" style={{ fontSize: 22, letterSpacing: 2, margin: "var(--s-1) 0" }}>
+                  {admitting.code ?? "…"}
+                </div>
+                <label className="row" style={{ gap: "var(--s-2)", alignItems: "flex-start" }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: "auto", marginTop: 3 }}
+                    checked={admitting.confirmed}
+                    onChange={(e) => setAdmitting({ ...admitting, confirmed: e.target.checked })}
+                  />
+                  <span className="small">{t("team.verifyConfirm")}</span>
+                </label>
+                <div className="hint small" style={{ marginTop: "var(--s-1)" }}>{t("team.verifyMismatch")}</div>
+              </div>
+              {teamProjects.length > 0 && (
+                <p className="hint" style={{ margin: 0 }}>
+                  {t("team.letInPick")}
+                </p>
+              )}
               {/* Said, because the ticks below would otherwise look like they
                   limit somebody they cannot: an owner or admin reaches every
                   folder by role (rbac.rs, has_implicit_project_access). */}
@@ -314,7 +347,7 @@ export function Users({
               <button type="button" className="ghost" onClick={() => setAdmitting(null)}>
                 {t("ui.cancel")}
               </button>
-              <button type="submit" className="primary" autoFocus>
+              <button type="submit" className="primary" disabled={!admitting.confirmed || !admitting.code}>
                 {admitting.picked.size > 0 ? t("team.letIn") : t("team.giveKey")}
               </button>
             </div>
@@ -412,12 +445,8 @@ export function Users({
                       disabled={busy}
                       onClick={() =>
                         teamProjects.length > 0
-                          ? setAdmitting({
-                              member: m,
-                              picked: new Set(invitedFor(m.email)),
-                              accessRole: invitedRole(m.email, roles),
-                            })
-                          : run(() => api.handOverKey(m.user_id, m.public_key))
+                          ? openAdmit(m, new Set(invitedFor(m.email)))
+                          : openAdmit(m, new Set())
                       }
                     >
                       {teamProjects.length > 0 ? t("team.letIn") : t("team.giveKey")}

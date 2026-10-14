@@ -125,9 +125,19 @@ The owner or an admin runs the team from **Users**.
    invitation**), enter the code and choose their own password. You never see it.
 4. In **Users** they are marked **waiting to be let in**. Press **Let them in** and
    tick the projects they need.
+5. Before letting them in, check the **verification code**. Their Fury shows eight
+   digits on the waiting screen; the **Let them in** dialog shows the digits it
+   expects. Ask the person for theirs privately and tick **They told me this
+   code** only if they match.
 
 Step 4 is the easy one to miss. Until then they can sign in and see the team,
 and open nothing.
+
+Step 5 is what tells you who signed up. An invitation code works for whoever
+types it first, so if it leaked, somebody else may be waiting under your
+colleague's address. Then your colleague has no code at all ("the invitation
+has already been used"). Do not let that person in: press **Remove** and send a
+new invitation.
 
 ### Roles
 
