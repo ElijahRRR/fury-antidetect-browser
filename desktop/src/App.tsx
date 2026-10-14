@@ -27,7 +27,7 @@ import { Sidebar, type View } from "./components/Sidebar";
 import { ShareDialog } from "./components/ShareDialog";
 import { CsvImport } from "./components/CsvImport";
 import { AntidetectImport } from "./components/AntidetectImport";
-import { Icon, IconButton } from "./components/Icon";
+import { IconButton } from "./components/Icon";
 import { useTheme } from "./theme";
 import { exitSharing } from "./consistency";
 import { isSuggested } from "./status";
@@ -1127,95 +1127,26 @@ export function App() {
                 time a checkbox is ticked is the "visual mess" this replaced. */}
             {chosen.length > 0 && (
               <div className="bulk">
-                <span className="muted small">
-                  {t("bar.selected", { n: chosen.length })}
-                </span>
+                {/* One kind of control, each saying what it does in words, in
+                    the order a person reaches for them: what is selected, open
+                    or close it, where it lives, who gets it, its proxy, the
+                    rest, and Delete apart at the end. Until 14.10.2026 this was
+                    text buttons, bare icons and two dropdowns side by side, and
+                    the way to hand a profile from this machine to the team was
+                    an unlabelled arrow that filed it into a project of its own
+                    choosing ("I don't understand how to give my team access"). */}
+                <span className="muted small">{t("bar.selected", { n: chosen.length })}</span>
+                <button className="ghost" onClick={() => setSelected(new Set())}>
+                  {t("bar.clearSelection")}
+                </button>
+                <span className="bulkGap" />
                 {openable.length > 0 && (
                   <button disabled={busy} onClick={openMany}>
                     {t("bar.openSelected", { n: openable.length })}
                   </button>
                 )}
-                {/* Only what is on the server can be given away, so the button
-                    appears only when every selected row is. A local profile
-                    exists nowhere the other person can reach, and offering to
-                    share it would end in an error that reads like a fault
-                    rather than like an explanation. */}
-                {/* Shown for local rows too, disabled, with the reason on it.
-                    Hiding it was worse: a profile on this machine cannot be
-                    given away until it is on a server, and with no button there
-                    was nothing on screen to say so -- the question "how do I
-                    give somebody this profile" had no answer anywhere in the
-                    window. A greyed control that explains itself teaches the
-                    order of the two steps. */}
-                {/* Enabled for anything. A local profile is copied to the
-                    server on the way, by the dialog, without being asked --
-                    "why can't I just share it and have it appear for them" is
-                    the right question and the answer was four steps of our
-                    bookkeeping. */}
-                {!local && chosen.length > 0 && (
-                  <button className="ghost" disabled={busy} onClick={() => setSharing(chosen)}>
-                    <Icon name="share" /> {t("row.share")}
-                  </button>
-                )}
-                {/* The other direction, and the one that makes sharing reachable
-                    for a profile that started here. Offered only for local rows,
-                    and only when there is a server to send them to. */}
-                {!local && chosen.length > 0 && chosen.every((p) => p.origin === "local") && (
-                  <IconButton
-                    icon="upload"
-                    label={t("up.send")}
-                    disabled={busy}
-                    onClick={async () => {
-                      // Into the project being viewed, or the only one there
-                      // is. No picker: Ask has no list, and adding one for this
-                      // would be a screen of its own -- while choosing a
-                      // project is already what the sidebar is for.
-                      // A folder is bookkeeping, and asking somebody to choose
-                      // one before they may do the thing they asked for is
-                      // making them do ours. The one being viewed if there is
-                      // one, otherwise a server project named after the folder
-                      // these came from, made once and reused.
-                      const team = projects.filter((p) => p.origin === "team");
-                      let target = active?.origin === "team" ? active.id : null;
-                      if (!target) {
-                        const wanted = chosen[0].project_name?.trim() || t("share.autoProject");
-                        target =
-                          team.find((p) => p.name === wanted)?.id ??
-                          (await api.createProjectIn(wanted, "team")).id;
-                      }
-                      const go = await ask({
-                        title: t("up.send"),
-                        detail: t("up.confirm", {
-                          n: String(chosen.length),
-                          project: projects.find((p) => p.id === target)?.name ?? "",
-                        }),
-                        confirmLabel: t("up.send"),
-                      });
-                      if (go === null) return;
-                      setBusy(true);
-                      let proxyMoved = false;
-                      try {
-                        for (const p of chosen) {
-                          const r = await api.uploadProfile(p.id, target);
-                          proxyMoved = proxyMoved || r.proxy_moved;
-                        }
-                        setError(
-                          t("up.done", { name: chosen[0].name }) +
-                            (proxyMoved ? " " + t("up.proxyMoved") : ""),
-                        );
-                      } catch (e) {
-                        setError((e as Error).message);
-                      } finally {
-                        setBusy(false);
-                        await refreshProfiles();
-                      }
-                    }}
-                  />
-                )}
                 {closable.length > 0 && (
-                  <IconButton
-                    icon="close"
-                    label={t("bar.closeSelected", { n: closable.length })}
+                  <button
                     disabled={busy}
                     onClick={async () => {
                       setBusy(true);
@@ -1223,91 +1154,130 @@ export function App() {
                       await refreshProfiles();
                       setBusy(false);
                     }}
-                  />
+                  >
+                    {t("bar.closeSelected", { n: closable.length })}
+                  </button>
                 )}
-                <IconButton
-                  icon="trash"
-                  danger
-                  label={t("bar.deleteSelected", { n: chosen.length })}
-                  title={
-                    closable.length > 0
-                      ? t("row.closeFirst")
-                      : t("bar.deleteSelected", { n: chosen.length })
-                  }
-                  disabled={busy || closable.length > 0}
-                  onClick={async () => {
-                    const go = await ask({
-                      title: t("bar.deleteSelected", { n: chosen.length }),
-                      detail: t("bar.confirmDeleteMany", { n: chosen.length }),
-                      confirmLabel: t("ui.delete"),
-                      danger: true,
-                    });
-                    if (go === null) return;
-                    setBusy(true);
-                    for (const p of chosen) await api.deleteProfile(p.id, p.origin);
-                    setSelected(new Set());
-                    await load();
-                    await refreshProfiles();
-                    setBusy(false);
-                  }}
-                />
-                {/* Filing, into folders of the SAME side as the selection.
-                    A local profile goes in a local folder and a team one in a
-                    team project; offering the other list is what produced
-                    "not found" from a server asked about a profile it had never
-                    seen. Hiding it altogether was the over-correction: it left
-                    somebody who just wants their own profiles sorted into
-                    Personal and Work with no way to do it. */}
+                {/* Where the selection lives, both sides in one list. A folder
+                    on the same side is a move, as before. A team project for
+                    profiles from this machine is how the team gets them: they
+                    go to the server, into that project, and everyone the
+                    project is open to sees them -- the copy here goes to the
+                    trash, so the profile is not listed twice. The other way
+                    (server to this machine) does not exist, so a team selection
+                    is offered team projects only. */}
                 {(() => {
                   const side = chosen.every((p) => p.origin === "local")
                     ? "local"
                     : chosen.every((p) => p.origin === "team")
                       ? "team"
                       : null;
-                  const filable = side ? projects.filter((p) => p.origin === side) : [];
-                  return filable.length > 0 && (
-                  <Select
-                    style={{ width: "auto" }}
-                    value=""
-                    disabled={busy}
-                    onChange={async (e) => {
-                      const to = e.target.value;
-                      if (to === "") return;
-                      setBusy(true);
-                      try {
-                        // "\u0000none" rather than "" for out-of-every-project:
-                        // an empty value is the placeholder, and the two must
-                        // not be the same string or picking one does nothing.
-                        await api.moveProfiles(
-                          chosen.map((p) => p.id),
-                          to === "\u0000none" ? null : to,
-                          chosen[0].origin,
-                        );
-                        setSelected(new Set());
-                        await load();
-                        await refreshProfiles();
-                      } catch (err) {
-                        setError(say(err));
-                      } finally {
-                        setBusy(false);
+                  const here = projects.filter((p) => p.origin === "local");
+                  const team = projects.filter((p) => p.origin === "team");
+                  if (here.length + team.length === 0) return null;
+                  const sendToTeam = async (target: string) => {
+                    const project = projects.find((p) => p.id === target)?.name ?? "";
+                    const go = await ask({
+                      title: t("bar.moveTo"),
+                      detail: t("up.moveConfirm", { n: String(chosen.length), project }),
+                      confirmLabel: t("up.moveGo"),
+                    });
+                    if (go === null) return;
+                    setBusy(true);
+                    setError(null);
+                    let moved = 0;
+                    let proxyMoved = false;
+                    try {
+                      for (const p of chosen) {
+                        const r = await api.uploadProfile(p.id, target);
+                        proxyMoved = proxyMoved || r.proxy_moved;
+                        // Only once it is on the server: a failed send leaves
+                        // the profile where it was.
+                        await api.deleteProfile(p.id, "local");
+                        moved += 1;
                       }
-                    }}
-                  >
-                    <option value="">{t("bar.moveTo")}</option>
-                    {filable.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                    {/* Out of every folder is a local idea: on a server a
-                        profile always belongs to a project, because the project
-                        is what carries access to it. */}
-                    {side === "local" && (
-                      <option value={"\u0000none"}>{t("bar.moveOut")}</option>
-                    )}
-                  </Select>
+                    } catch (e) {
+                      setError(say(e));
+                    } finally {
+                      setSelected(new Set());
+                      await load();
+                      await refreshProfiles();
+                      setBusy(false);
+                    }
+                    if (moved > 0) {
+                      setNotice({
+                        text: t("up.moved", { n: moved, project }) + (proxyMoved ? " " + t("up.proxyMoved") : ""),
+                        forProfile: null,
+                      });
+                    }
+                  };
+                  return (
+                    <Select
+                      style={{ width: "auto" }}
+                      value=""
+                      disabled={busy || side === null}
+                      title={side === null ? t("bar.moveMixed") : undefined}
+                      onChange={async (e) => {
+                        const to = e.target.value;
+                        if (to === "") return;
+                        if (side === "local" && team.some((p) => p.id === to)) {
+                          await sendToTeam(to);
+                          return;
+                        }
+                        setBusy(true);
+                        try {
+                          // "\u0000none" rather than "" for out-of-every-folder:
+                          // an empty value is the placeholder, and the two must
+                          // not be the same string or picking one does nothing.
+                          await api.moveProfiles(
+                            chosen.map((p) => p.id),
+                            to === "\u0000none" ? null : to,
+                            chosen[0].origin,
+                          );
+                          setSelected(new Set());
+                          await load();
+                          await refreshProfiles();
+                        } catch (err) {
+                          setError(say(err));
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      <option value="">{t("bar.moveTo")}</option>
+                      {side === "local" && (
+                        <optgroup label={t("app.projectsHere")}>
+                          {here.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                          {/* Out of every folder is a local idea: on a server a
+                              profile always belongs to a project, because the
+                              project is what carries access to it. */}
+                          <option value={"\u0000none"}>{t("bar.moveOut")}</option>
+                        </optgroup>
+                      )}
+                      {team.length > 0 && (
+                        <optgroup label={t("app.projectsTeam")}>
+                          {team.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </Select>
                   );
                 })()}
+                {/* To one person, by address -- not the same thing as the
+                    team. The hover says which is which. A profile from this
+                    machine is copied to the server on the way, by the dialog. */}
+                {!local && (
+                  <button disabled={busy} title={t("bar.shareWhy")} onClick={() => setSharing(chosen)}>
+                    {t("row.share")}
+                  </button>
+                )}
                 {/* Proxy for the whole selection (5.7). Offered when every
                     chosen row is on the side the proxy list describes: the
                     list is this machine's in local mode and the server's
@@ -1373,9 +1343,6 @@ export function App() {
                     </Select>
                   );
                 })()}
-                {/* One profile, not many. Copying acts on a single source and
-                    cookies belong to a single jar, so offering either for a
-                    multi-selection would mean guessing which one was meant. */}
                 {chosen.length >= 1 && local && (
                   <button disabled={busy} title={t("warm.why")} onClick={() => setWarmFor(chosen)}>
                     {t("warm.button", { n: chosen.length })}
@@ -1383,7 +1350,6 @@ export function App() {
                 )}
                 {chosen.length >= 2 && local && (
                   <button
-                    className="primary"
                     disabled={busy}
                     title={t("mir.hint")}
                     onClick={async () => {
@@ -1410,18 +1376,40 @@ export function App() {
                     {t("mir.start", { n: chosen.length })}
                   </button>
                 )}
+                {/* One profile, not many. Copying acts on a single source and
+                    cookies belong to a single jar, so offering either for a
+                    multi-selection would mean guessing which one was meant. */}
                 {chosen.length === 1 && (
                   <>
-                    <IconButton icon="copy" label={t("bp.clone")} onClick={() => setBulk(chosen[0])} />
-                    <IconButton
-                      icon="cookie"
-                      label={t("ck.cookies")}
-                      onClick={() => setCookiesFor(chosen[0])}
-                    />
+                    <button disabled={busy} onClick={() => setBulk(chosen[0])}>
+                      {t("bar.cloneOne")}
+                    </button>
+                    <button disabled={busy} onClick={() => setCookiesFor(chosen[0])}>
+                      {t("bar.cookiesOne")}
+                    </button>
                   </>
                 )}
-                <button className="ghost" onClick={() => setSelected(new Set())}>
-                  {t("bar.clearSelection")}
+                <button
+                  className="danger bulkDelete"
+                  title={closable.length > 0 ? t("row.closeFirst") : undefined}
+                  disabled={busy || closable.length > 0}
+                  onClick={async () => {
+                    const go = await ask({
+                      title: t("bar.deleteSelected", { n: chosen.length }),
+                      detail: t("bar.confirmDeleteMany", { n: chosen.length }),
+                      confirmLabel: t("ui.delete"),
+                      danger: true,
+                    });
+                    if (go === null) return;
+                    setBusy(true);
+                    for (const p of chosen) await api.deleteProfile(p.id, p.origin);
+                    setSelected(new Set());
+                    await load();
+                    await refreshProfiles();
+                    setBusy(false);
+                  }}
+                >
+                  {t("bar.deleteSelected", { n: chosen.length })}
                 </button>
               </div>
             )}

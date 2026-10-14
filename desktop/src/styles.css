@@ -1305,10 +1305,18 @@ input::placeholder {
   border-top: 1px solid var(--line);
 }
 
-/* A hair of space before the destructive one, so the hand does not arrive at
-   Delete on the way to Duplicate. */
-.bulk .icon.danger {
-  margin-left: var(--s-1);
+/* Between what is selected and what to do with it. */
+.bulk .bulkGap {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--s-1);
+  background: var(--line-strong);
+}
+
+/* Delete apart, at the far end: the hand does not arrive at it on the way to
+   Duplicate. On a narrow window it wraps with the rest. */
+.bulk .bulkDelete {
+  margin-left: auto;
 }
 
 /* ---- command palette --------------------------------------------------- */
@@ -1848,6 +1856,18 @@ button.selectBtn:disabled {
 
 .selectOption.active {
   background: var(--raised);
+}
+
+/* An <optgroup>'s label: the same small capitals as the sidebar's section
+   names, so "Проекты команды" reads as the place it is in the sidebar. */
+.selectHeading {
+  padding: 8px 12px 3px 26px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .selectOption.disabled {

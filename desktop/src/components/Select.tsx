@@ -32,7 +32,8 @@ import { createPortal } from "react-dom";
  *  downwards, or upwards when there is not room. Keyboard: arrows, Home/End,
  *  Enter or Space to choose, Escape to close, letters to jump. */
 
-type Opt = { value: string; label: string; disabled: boolean };
+/** `heading` is an `<optgroup>`'s label: shown in the list, never chosen. */
+type Opt = { value: string; label: string; disabled: boolean; heading?: boolean };
 
 export interface SelectChange {
   target: { value: string };
@@ -53,6 +54,14 @@ function collect(children: ReactNode, out: Opt[] = []): Opt[] {
   Children.forEach(children, (child) => {
     if (!isValidElement<{ value?: unknown; disabled?: boolean; children?: ReactNode }>(child)) return;
     if (child.type === Fragment) {
+      collect(child.props.children, out);
+      return;
+    }
+    // A group: its label as a heading, then its options. The value is one no
+    // option can have, so a heading is never the selected row.
+    if (child.type === "optgroup") {
+      const label = String((child.props as { label?: unknown }).label ?? "");
+      out.push({ value: `\u0000group:${label}`, label, disabled: true, heading: true });
       collect(child.props.children, out);
       return;
     }
@@ -279,7 +288,12 @@ export function Select({
               ...(place.up ? { bottom: window.innerHeight - place.top } : { top: place.top }),
             }}
           >
-            {options.map((o, i) => (
+            {options.map((o, i) =>
+              o.heading ? (
+                <div key={i} role="presentation" className="selectHeading">
+                  {o.label}
+                </div>
+              ) : (
               <div
                 key={i}
                 id={`${listId}-${i}`}
@@ -295,7 +309,8 @@ export function Select({
                 <span className="selectCheck">{i === selected ? "✓" : ""}</span>
                 <span className="selectLabel">{o.label || " "}</span>
               </div>
-            ))}
+            ),
+            )}
           </div>,
           document.body,
         )}
