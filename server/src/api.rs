@@ -44,6 +44,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/me/totp/verify", post(crate::security::totp_verify))
         .route("/v1/org/security", get(crate::security::get_policy).put(crate::security::put_policy))
         .route("/v1/org/domain-lists", get(list_domain_lists).post(upsert_domain_list))
+        .route("/v1/org/access-roles", get(list_access_roles).post(upsert_access_role))
+        .route("/v1/org/access-roles/{id}", axum::routing::delete(delete_access_role))
         .route("/v1/org/personas", get(list_org_personas).post(add_org_persona))
         .route("/v1/org/personas/{id}", axum::routing::delete(delete_org_persona))
         .route("/v1/org/domain-lists/{id}", axum::routing::delete(delete_domain_list))
@@ -1311,7 +1313,34 @@ async fn grant_access(
         ));
     };
     let role = auth::parse_role(&role).ok_or(ApiError::NotFound)?;
-    let requested = PermSet::from_iter(req.permissions.iter().copied());
+
+    // Which of the organisation's own roles the grant follows (0017). Absent
+    // keeps the current link, so attaching a domain list to somebody on
+    // "operator" leaves them on "operator"; null unlinks.
+    let link: Option<Uuid> = match req.access_role {
+        Some(link) => link,
+        None => sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT access_role FROM project_grants WHERE project_id = $1 AND user_id = $2",
+        )
+        .bind(project_id)
+        .bind(req.user_id)
+        .fetch_optional(db.as_mut())
+        .await?
+        .flatten(),
+    };
+    let requested = match link {
+        Some(id) => {
+            let bits: Option<i64> = sqlx::query_scalar(
+                "SELECT permissions FROM org_access_roles WHERE id = $1 AND org_id = $2",
+            )
+            .bind(id)
+            .bind(caller.org_id)
+            .fetch_optional(db.as_mut())
+            .await?;
+            PermSet(bits.ok_or_else(|| ApiError::BadRequest("that role does not exist in this organisation".into()))?)
+        }
+        None => PermSet::from_iter(req.permissions.iter().copied()),
+    };
     let capped = requested.intersect(fury_shared::rbac::role_ceiling(role));
 
     // $5::timestamptz, not $5. The expiry arrives as an RFC 3339 string — the
@@ -1338,12 +1367,13 @@ async fn grant_access(
         }
     };
     sqlx::query(
-        "INSERT INTO project_grants (project_id, user_id, permissions, granted_by, expires_at, domain_lists) \
-         VALUES ($1, $2, $3, $4, $5::timestamptz, COALESCE($6, '{}')) \
+        "INSERT INTO project_grants (project_id, user_id, permissions, granted_by, expires_at, domain_lists, access_role) \
+         VALUES ($1, $2, $3, $4, $5::timestamptz, COALESCE($6, '{}'), $7) \
          ON CONFLICT (project_id, user_id) DO UPDATE \
          SET permissions = EXCLUDED.permissions, granted_by = EXCLUDED.granted_by, \
              granted_at = now(), expires_at = EXCLUDED.expires_at, \
-             domain_lists = COALESCE($6, project_grants.domain_lists)",
+             domain_lists = COALESCE($6, project_grants.domain_lists), \
+             access_role = EXCLUDED.access_role",
     )
     .bind(project_id)
     .bind(req.user_id)
@@ -1351,14 +1381,16 @@ async fn grant_access(
     .bind(caller.user_id)
     .bind(req.expires_at.as_deref())
     .bind(lists.as_deref())
+    .bind(link)
     .execute(db.as_mut())
     .await?;
 
     audit(db.as_mut(), &caller, "access.grant", Some(project_id),
-          json!({ "target": req.user_id, "requested": requested.to_vec(), "granted": capped.to_vec(), "domain_lists": req.domain_lists }))
+          json!({ "target": req.user_id, "requested": requested.to_vec(), "granted": capped.to_vec(),
+                  "domain_lists": req.domain_lists, "access_role": link }))
         .await?;
 
-    Ok(Json(json!({ "granted": capped.to_vec() })))
+    Ok(Json(json!({ "granted": capped.to_vec(), "access_role": link })))
 }
 
 // ---- the organisation's domain lists ---------------------------------------
@@ -1583,6 +1615,145 @@ async fn delete_domain_list(mut db: auth::Db, Path(id): Path<Uuid>) -> ApiResult
     Ok(Json(json!({ "deleted": true })))
 }
 
+// ---- the organisation's own roles (0017) ------------------------------------
+
+#[derive(Deserialize)]
+struct AccessRoleUpsert {
+    #[serde(default)]
+    id: Option<Uuid>,
+    name: String,
+    permissions: Vec<Perm>,
+}
+
+/// `GET /v1/org/access-roles` -- everyone in the organisation may read them: a
+/// manager giving access inside a project picks from the same list, and a
+/// member sees what the name on their row means.
+async fn list_access_roles(mut db: auth::Db) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    let rows: Vec<(Uuid, String, i64, String, i64)> = sqlx::query_as(&format!(
+        "SELECT r.id, r.name, r.permissions, {}, \
+                (SELECT count(*) FROM project_grants g WHERE g.access_role = r.id) \
+         FROM org_access_roles r WHERE r.org_id = $1 ORDER BY r.name",
+        rfc3339("r.updated_at")
+    ))
+    .bind(caller.org_id)
+    .fetch_all(db.as_mut())
+    .await?;
+    Ok(Json(json!(rows
+        .into_iter()
+        .map(|(id, name, perms, updated_at, grants)| json!({
+            "id": id, "name": name, "permissions": PermSet(perms).to_vec(),
+            "updated_at": updated_at, "grants": grants,
+        }))
+        .collect::<Vec<_>>())))
+}
+
+async fn upsert_access_role(mut db: auth::Db, Json(req): Json<AccessRoleUpsert>) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    if !matches!(caller.role, fury_shared::rbac::OrgRole::Owner | fury_shared::rbac::OrgRole::Admin) {
+        return Err(ApiError::Denied(Perm::ManageAccess));
+    }
+    let name = req.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(ApiError::BadRequest("a role needs a name of up to 64 characters".into()));
+    }
+    // Seeing the profiles is what being let into a project is; a role without
+    // it would put people on the project's list who can reach none of it.
+    let perms = PermSet::from_iter(req.permissions.iter().copied()).with(Perm::View);
+
+    let id = req.id.unwrap_or_else(Uuid::now_v7);
+    let mut tx = db.begin().await?;
+    // The update is limited to this organisation's row: an id from another
+    // organisation is a role that does not exist here, not one to overwrite.
+    let written = sqlx::query(
+        "INSERT INTO org_access_roles (id, org_id, name, permissions, created_by) VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, permissions = EXCLUDED.permissions, updated_at = now() \
+         WHERE org_access_roles.org_id = EXCLUDED.org_id",
+    )
+    .bind(id)
+    .bind(caller.org_id)
+    .bind(name)
+    .bind(perms.0)
+    .bind(caller.user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::Database(ref d) if d.is_unique_violation() => ApiError::Conflict(format!("a role named {name:?} already exists")),
+        other => ApiError::Db(other),
+    })?
+    .rows_affected();
+    if written == 0 {
+        return Err(ApiError::NotFound);
+    }
+    let relinked = relink(&mut tx, Some(id), None).await?;
+    tx.commit().await?;
+
+    audit(db.as_mut(), &caller, "access_role.saved", Some(id),
+          json!({ "name": name, "permissions": perms.to_vec(), "grants_rewritten": relinked }))
+        .await?;
+    Ok(Json(json!({ "id": id, "grants_rewritten": relinked })))
+}
+
+async fn delete_access_role(mut db: auth::Db, Path(id): Path<Uuid>) -> ApiResult<Json<serde_json::Value>> {
+    let caller = db.caller;
+    if !matches!(caller.role, fury_shared::rbac::OrgRole::Owner | fury_shared::rbac::OrgRole::Admin) {
+        return Err(ApiError::Denied(Perm::ManageAccess));
+    }
+    // The grants on it keep the boxes they have and lose the link (ON DELETE
+    // SET NULL): nobody's access changes because a name went off the list.
+    let n = sqlx::query("DELETE FROM org_access_roles WHERE id = $1 AND org_id = $2")
+        .bind(id)
+        .bind(caller.org_id)
+        .execute(db.as_mut())
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    audit(db.as_mut(), &caller, "access_role.deleted", Some(id), json!({})).await?;
+    Ok(Json(json!({ "deleted": true })))
+}
+
+/// Rewrite `permissions` on the grants that follow a role, from the role's
+/// boxes capped by each person's org role -- the same cap `grant_access`
+/// applies, from the same `role_ceiling`, so a linked grant never holds what a
+/// hand-ticked one could not. Narrowed to one role, one person, or both.
+///
+/// This is what keeps every check in the server reading one column: the link
+/// is resolved when it changes, not on every request.
+pub(crate) async fn relink(
+    db: &mut sqlx::PgConnection,
+    role_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+) -> ApiResult<u64> {
+    let rows: Vec<(Uuid, Uuid, String, i64)> = sqlx::query_as(
+        "SELECT g.project_id, g.user_id, m.role::text, r.permissions \
+         FROM project_grants g \
+         JOIN org_access_roles r ON r.id = g.access_role \
+         JOIN projects p ON p.id = g.project_id \
+         JOIN org_members m ON m.org_id = p.org_id AND m.user_id = g.user_id \
+         WHERE ($1::uuid IS NULL OR g.access_role = $1) \
+           AND ($2::uuid IS NULL OR g.user_id = $2)",
+    )
+    .bind(role_id)
+    .bind(user_id)
+    .fetch_all(&mut *db)
+    .await?;
+    let mut n = 0;
+    for (project_id, user_id, org_role, bits) in rows {
+        let Some(org_role) = auth::parse_role(&org_role) else { continue };
+        let capped = PermSet(bits).intersect(fury_shared::rbac::role_ceiling(org_role));
+        n += sqlx::query("UPDATE project_grants SET permissions = $3 WHERE project_id = $1 AND user_id = $2")
+            .bind(project_id)
+            .bind(user_id)
+            .bind(capped.0)
+            .execute(&mut *db)
+            .await?
+            .rows_affected();
+    }
+    Ok(n)
+}
+
 /// Who can reach this project, and with what.
 ///
 /// Owners and admins reach every project implicitly and have no grant row, so
@@ -1598,9 +1769,9 @@ async fn list_grants(
 
     rbac_guard::require(db.as_mut(), caller.user_id, project_id, Perm::ManageAccess).await?;
 
-    let rows: Vec<(Uuid, String, String, i64, Option<String>, Vec<Uuid>)> = sqlx::query_as(
+    let rows: Vec<(Uuid, String, String, i64, Option<String>, Vec<Uuid>, Option<Uuid>)> = sqlx::query_as(
         &format!(
-        "SELECT u.id, u.email, m.role::text, g.permissions, {}, g.domain_lists \
+        "SELECT u.id, u.email, m.role::text, g.permissions, {}, g.domain_lists, g.access_role \
          FROM project_grants g \
          JOIN users u ON u.id = g.user_id \
          JOIN projects p ON p.id = g.project_id \
@@ -1626,13 +1797,14 @@ async fn list_grants(
     .await?;
 
     Ok(Json(json!({
-        "granted": rows.iter().map(|(id, email, role, perms, expires, lists)| json!({
+        "granted": rows.iter().map(|(id, email, role, perms, expires, lists, access_role)| json!({
             "user_id": id,
             "email": email,
             "role": role,
             "permissions": PermSet(*perms).to_vec(),
             "expires_at": expires,
             "domain_lists": lists,
+            "access_role": access_role,
         })).collect::<Vec<_>>(),
         "implicit": implicit.iter().map(|(id, email, role)| json!({
             "user_id": id, "email": email, "role": role,
@@ -3125,6 +3297,11 @@ async fn set_member_role(
         .bind(user_id)
         .execute(db.as_mut())
         .await?;
+
+    // A grant that follows one of the organisation's roles is rewritten
+    // against the new ceiling: a member made manager on "lead" gets the
+    // "give access" box the role has and the member ceiling withheld.
+    relink(db.as_mut(), None, Some(user_id)).await?;
 
     audit(
         db.as_mut(),

@@ -242,9 +242,12 @@ mod tests {
 /// here rather than be handed to the operating system.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), crate::commands::ApiErr> {
-    if !url.starts_with("https://") {
+    // mailto: as well, for "send the invitation by email" (Users): it opens a
+    // draft in the mail client and runs nothing, which is the property the
+    // check is for.
+    if !url.starts_with("https://") && !url.starts_with("mailto:") {
         return Err(crate::commands::ApiErr::local(format!(
-            "refusing to open {url}: only https links"
+            "refusing to open {url}: only https and mailto links"
         )));
     }
 

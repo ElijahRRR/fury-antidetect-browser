@@ -1880,20 +1880,44 @@ pub async fn grant_access(
     // what the grant already carries, so the "let them in" button does not
     // strip lists an owner set on purpose.
     domain_lists: Option<Vec<String>>,
+    // The organisation role this grant follows. Only sent when `link` is set,
+    // because absent and null mean different things to the server: absent
+    // keeps the link it has, null unlinks (server 0017).
+    access_role: Option<String>,
+    link: Option<bool>,
 ) -> R<serde_json::Value> {
+    let mut body = serde_json::json!({
+        "user_id": user_id,
+        "permissions": permissions,
+        "expires_at": serde_json::Value::Null,
+        "domain_lists": domain_lists,
+    });
+    if link.unwrap_or(false) {
+        body["access_role"] = serde_json::json!(access_role);
+    }
     state
         .call(
             reqwest::Method::POST,
             &format!("/v1/projects/{project_id}/grants"),
-            Body::Json(serde_json::json!({
-                "user_id": user_id,
-                "permissions": permissions,
-                "expires_at": serde_json::Value::Null,
-                "domain_lists": domain_lists,
-            })),
+            Body::Json(body),
             true,
         )
         .await
+}
+
+// ---- the organisation's own roles -----------------------------------------
+
+#[tauri::command]
+pub async fn access_roles(state: State<'_, AppState>) -> R<serde_json::Value> {
+    state.call(reqwest::Method::GET, "/v1/org/access-roles", Body::None, true).await
+}
+#[tauri::command]
+pub async fn save_access_role(state: State<'_, AppState>, id: Option<String>, name: String, permissions: Vec<String>) -> R<serde_json::Value> {
+    state.call(reqwest::Method::POST, "/v1/org/access-roles", Body::Json(serde_json::json!({ "id": id, "name": name, "permissions": permissions })), true).await
+}
+#[tauri::command]
+pub async fn delete_access_role(state: State<'_, AppState>, id: String) -> R<serde_json::Value> {
+    state.call(reqwest::Method::DELETE, &format!("/v1/org/access-roles/{id}"), Body::None, true).await
 }
 
 // ---- the organisation's domain lists --------------------------------------

@@ -309,6 +309,22 @@ pub struct GrantRequest {
     /// project. Absent keeps what the grant already carries.
     #[serde(default)]
     pub domain_lists: Option<Vec<Uuid>>,
+    /// One of the organisation's own roles (server 0017). Absent keeps the
+    /// link the grant already has; `null` unlinks it, so the boxes sent in
+    /// `permissions` stand on their own; an id links it, and `permissions` is
+    /// then ignored in favour of the role's.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub access_role: Option<Option<Uuid>>,
+}
+
+/// Tells an absent field from an explicit `null`: absent is the outer `None`
+/// (from `#[serde(default)]`), `null` arrives here and becomes `Some(None)`.
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
 }
 
 // ---------------------------------------------------------------------------
@@ -337,5 +353,26 @@ mod hex_bytes {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod grant_request_tests {
+    use super::GrantRequest;
+
+    fn parse(extra: &str) -> GrantRequest {
+        serde_json::from_str(&format!(
+            r#"{{"user_id":"aaaaaaaa-0000-0000-0000-000000000001","permissions":["view"],"expires_at":null{extra}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn absent_null_and_an_id_are_three_different_answers() {
+        // Absent keeps the link: attaching a domain list must not unlink a role.
+        assert_eq!(parse("").access_role, None);
+        assert_eq!(parse(r#","access_role":null"#).access_role, Some(None));
+        let id = uuid::Uuid::parse_str("eeeeeeee-0000-0000-0000-000000000001").unwrap();
+        assert_eq!(parse(r#","access_role":"eeeeeeee-0000-0000-0000-000000000001""#).access_role, Some(Some(id)));
     }
 }

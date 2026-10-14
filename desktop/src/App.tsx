@@ -1430,6 +1430,7 @@ export function App() {
           <Users
             projects={projects}
             local={local}
+            serverUrl={shell.server_url}
             onSignOut={signOut}
             onConnect={() => setSettingsOpen(true)}
           />

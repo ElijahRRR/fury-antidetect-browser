@@ -144,6 +144,21 @@ A project is a folder of profiles and the unit of access: whoever has the
 project has every profile in it. In **Users** pick the project, **Add from the
 team**, tick the rights and **Grant access**. **Revoke** ends it at once.
 
+### Project roles
+
+When the same boxes have to be ticked for many people, make a role:
+**Users → Project roles → New role…**, a name and the rights. A role is picked
+in the **Role:** field beside a person in a project, in **Add from the team**,
+in the **Let them in** dialog, and when creating the invitation.
+
+A role is linked: change its boxes and everybody on it changes at once. While
+someone is on a role their boxes are locked; pick **by hand** to tick them
+yourself. Deleting a role takes nothing from anybody: they keep the same
+rights, just without the role.
+
+The team role stays the ceiling: a member never gets "give access to others",
+even if their project role has it. Owners and admins create and change roles.
+
 ### Giving one profile
 
 **Access** on a profile's row (or tick several and **Give access…**). Your team

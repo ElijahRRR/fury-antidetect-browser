@@ -202,6 +202,17 @@ export interface WarmProgress {
   started_at_ms: number;
 }
 
+/** A role the organisation named itself: a set of project rights given to
+ *  people project by project. Changing it changes everyone on it. */
+export interface AccessRole {
+  id: string;
+  name: string;
+  permissions: Perm[];
+  updated_at: string;
+  /** How many project grants follow it. */
+  grants: number;
+}
+
 export interface OrgDomainList {
   id: string;
   name: string;
@@ -830,13 +841,43 @@ export const api = {
     cmd("hand_over_key", { userId, publicKey }),
 
   grants: (projectId: string): Promise<{
-    granted: { user_id: string; email: string; role: string; permissions: Perm[]; domain_lists?: string[] }[];
+    granted: {
+      user_id: string;
+      email: string;
+      role: string;
+      permissions: Perm[];
+      domain_lists?: string[];
+      access_role?: string | null;
+    }[];
     implicit: { user_id: string; email: string; role: string }[];
   }> => cmd("grants", { projectId }),
 
-  /** `domainLists` undefined keeps what the grant already carries. */
-  grantAccess: (projectId: string, userId: string, permissions: Perm[], domainLists?: string[]): Promise<unknown> =>
-    cmd("grant_access", { projectId, userId, permissions, domainLists: domainLists ?? null }),
+  /** `domainLists` undefined keeps what the grant already carries. So does
+   *  `accessRole` undefined; `null` unlinks the grant from its role, so the
+   *  `permissions` sent stand on their own; an id links it, and the server
+   *  takes the role's boxes instead of `permissions`. */
+  grantAccess: (
+    projectId: string,
+    userId: string,
+    permissions: Perm[],
+    domainLists?: string[],
+    accessRole?: string | null,
+  ): Promise<unknown> =>
+    cmd("grant_access", {
+      projectId,
+      userId,
+      permissions,
+      domainLists: domainLists ?? null,
+      accessRole: accessRole ?? null,
+      link: accessRole !== undefined,
+    }),
+
+  /** The organisation's own roles (server 0017) — readable by every member,
+   *  written by owners and admins. */
+  accessRoles: (): Promise<AccessRole[]> => cmd<AccessRole[]>("access_roles"),
+  saveAccessRole: (id: string | null, name: string, permissions: Perm[]): Promise<{ id: string; grants_rewritten: number }> =>
+    cmd("save_access_role", { id, name, permissions }),
+  deleteAccessRole: (id: string): Promise<unknown> => cmd("delete_access_role", { id }),
 
   /** The organisation's domain lists — readable by every member, written by
    *  owners and admins, attached to grants. */

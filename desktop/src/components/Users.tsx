@@ -2,9 +2,10 @@
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type Perm, type Project } from "../api";
+import { api, type AccessRole, type Perm, type Project } from "../api";
 import { useI18n, type Key } from "../i18n";
 import { withStepUp } from "../stepUp";
+import { AccessRoles } from "./AccessRoles";
 import { Audit } from "./Audit";
 import { Security } from "./Security";
 import { TeamDomainLists } from "./TeamDomainLists";
@@ -15,6 +16,9 @@ type Members = Awaited<ReturnType<typeof api.orgMembers>>;
 type Grants = Awaited<ReturnType<typeof api.grants>>;
 
 const ROLES = ["admin", "manager", "member"] as const;
+
+/** Where a newcomer downloads Fury, in the instructions sent with a code. */
+const FURY_SITE = "https://furybrowser.dev";
 
 /** What being let into a project means: see it, open the profiles in it, and
  *  edit them. Not `reveal_secrets`, not `manage_access`, not deletion — those
@@ -56,6 +60,7 @@ const ALL_PERMS: Perm[] = [
 export function Users({
   projects,
   local,
+  serverUrl,
   onSignOut,
   onConnect,
 }: {
@@ -64,6 +69,9 @@ export function Users({
    *  lives, and hiding it until one exists means the way to get one is a
    *  setting nobody opens. */
   local: boolean;
+  /** Where this team lives, written into the instructions sent with a code:
+   *  a code is only valid on the server that issued it. */
+  serverUrl: string | null;
   onSignOut: () => void;
   onConnect: () => void;
 }) {
@@ -74,7 +82,13 @@ export function Users({
   const [busy, setBusy] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string>("member");
-  const [code, setCode] = useState<{ code: string; email: string } | null>(null);
+  const [code, setCode] = useState<{ code: string; email: string; hours: number } | null>(null);
+  // "copied" for two seconds, "failed" until the code goes away.
+  const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
+  // The instructions to send with the code, open under it; and the same
+  // copied/failed for the whole text.
+  const [sending, setSending] = useState(false);
+  const [textCopied, setTextCopied] = useState<"copied" | "failed" | null>(null);
 
   /** The server's folders, and only those.
    *
@@ -93,12 +107,19 @@ export function Users({
   const teamProjects = projects.filter((p) => p.origin === "team");
   const [project, setProject] = useState<string>(teamProjects[0]?.id ?? "");
   const [grants, setGrants] = useState<Grants | null>(null);
-  // Whom the "add from the team" picker has chosen.
+  // Whom the "add from the team" picker has chosen, and on which of the
+  // organisation's roles ("" is MEMBER_PERMS).
   const [adding, setAdding] = useState("");
+  const [addingRole, setAddingRole] = useState("");
+  // The organisation's own roles (server 0017), for every picker on this screen.
+  const [roles, setRoles] = useState<AccessRole[]>([]);
+  // Which of them the next invitation is for; remembered with it, see INVITED.
+  const [inviteRole, setInviteRole] = useState("");
   // Somebody being let in, and the folders ticked for them so far.
   const [admitting, setAdmitting] = useState<{
     member: Members["members"][number];
     picked: Set<string>;
+    accessRole: string;
   } | null>(null);
   // The organisation's domain lists, for attaching to a grant in the row.
   const [orgLists, setOrgLists] = useState<OrgDomainList[]>([]);
@@ -121,6 +142,13 @@ export function Users({
       setTeam(await api.orgMembers());
     } catch (e) {
       setError(say(e));
+    }
+    // Not fatal either way: an older server has no roles, and the pickers
+    // simply do not appear.
+    try {
+      setRoles(await api.accessRoles());
+    } catch {
+      setRoles([]);
     }
   }, []);
 
@@ -204,7 +232,7 @@ export function Users({
             aria-modal="true"
             onSubmit={(e) => {
               e.preventDefault();
-              const { member, picked } = admitting;
+              const { member, picked, accessRole } = admitting;
               setAdmitting(null);
               void run(async () => {
                 await api.handOverKey(member.user_id, member.public_key);
@@ -213,7 +241,7 @@ export function Users({
                 // way to tell which ones landed.
                 for (const p of teamProjects) {
                   if (picked.has(p.id)) {
-                    await api.grantAccess(p.id, member.user_id, MEMBER_PERMS);
+                    await api.grantAccess(p.id, member.user_id, MEMBER_PERMS, undefined, accessRole || null);
                   }
                 }
               });
@@ -252,6 +280,23 @@ export function Users({
                   </label>
                 ))}
               </div>
+              {roles.length > 0 && admitting.member.role !== "admin" && admitting.member.role !== "owner" && (
+                <label className="row" style={{ gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+                  <span className="small">{t("ar.withRights")}</span>
+                  <select
+                    style={{ width: "auto" }}
+                    value={admitting.accessRole}
+                    onChange={(e) => setAdmitting({ ...admitting, accessRole: e.target.value })}
+                  >
+                    <option value="">{t("ar.default")}</option>
+                    {roles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
             <div className="modalFoot">
               <div className="spacer" />
@@ -334,7 +379,7 @@ export function Users({
                     ))}
                   </select>
                 ) : (
-                  t(roleKey(m.role))
+                  <span title={t(roleWhat(m.role))}>{t(roleKey(m.role))}</span>
                 )}
               </td>
               <td>
@@ -356,7 +401,11 @@ export function Users({
                       disabled={busy}
                       onClick={() =>
                         teamProjects.length > 0
-                          ? setAdmitting({ member: m, picked: new Set(invitedFor(m.email)) })
+                          ? setAdmitting({
+                              member: m,
+                              picked: new Set(invitedFor(m.email)),
+                              accessRole: invitedRole(m.email, roles),
+                            })
                           : run(() => api.handOverKey(m.user_id, m.public_key))
                       }
                     >
@@ -430,6 +479,7 @@ export function Users({
                   const have = new Set<Perm>(g?.permissions ?? []);
                   const attached = new Set(g?.domain_lists ?? []);
                   const everything = m.role === "owner" || m.role === "admin";
+                  const linked = roles.find((r) => r.id === g?.access_role);
                   return (
                     <tr key={m.user_id}>
                       <td style={{ minWidth: 180 }}>
@@ -446,9 +496,40 @@ export function Users({
                                 profiles they cannot see. `manage_access` is
                                 greyed for a member, because the server drops
                                 it for that role (role_ceiling). */}
+                            {/* A role's boxes are the role's: ticking one
+                                here would quietly unlink this person from it,
+                                so they are locked and "by hand" is the way out,
+                                keeping the boxes as they are. */}
+                            {roles.length > 0 && (
+                              <div className="row" style={{ gap: "var(--s-2)", marginBottom: "var(--s-2)", flexWrap: "wrap" }}>
+                                <span className="small">{t("ar.inRow")}</span>
+                                <select
+                                  style={{ width: "auto" }}
+                                  value={linked?.id ?? ""}
+                                  disabled={busy}
+                                  onChange={(e) => {
+                                    const id = e.target.value;
+                                    void run(() =>
+                                      id
+                                        ? api.grantAccess(project, m.user_id, [], undefined, id)
+                                        : api.grantAccess(project, m.user_id, g?.permissions ?? MEMBER_PERMS, undefined, null),
+                                    );
+                                  }}
+                                >
+                                  <option value="">{t("ar.manual")}</option>
+                                  {roles.map((r) => (
+                                    <option key={r.id} value={r.id}>
+                                      {r.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                {linked && <span className="muted small">{t("ar.linkedHint")}</span>}
+                              </div>
+                            )}
                             <div className="permsGrid">
                               {ALL_PERMS.map((p) => {
-                                const locked = p === "view" || (p === "manage_access" && m.role === "member");
+                                const locked =
+                                  !!linked || p === "view" || (p === "manage_access" && m.role === "member");
                                 return (
                                   <label key={p} className="row" style={{ gap: 6, alignItems: "flex-start" }}>
                                     <input
@@ -462,7 +543,13 @@ export function Users({
                                         if (e.target.checked) next.add(p);
                                         else next.delete(p);
                                         void run(() =>
-                                          api.grantAccess(project, m.user_id, ALL_PERMS.filter((x) => next.has(x)), [...attached]),
+                                          api.grantAccess(
+                                            project,
+                                            m.user_id,
+                                            ALL_PERMS.filter((x) => next.has(x)),
+                                            [...attached],
+                                            null,
+                                          ),
                                         );
                                       }}
                                     />
@@ -537,12 +624,27 @@ export function Users({
                         </option>
                       ))}
                     </select>
+                    {roles.length > 0 && (
+                      <select
+                        style={{ width: "auto" }}
+                        value={addingRole}
+                        aria-label={t("ar.inRow")}
+                        onChange={(e) => setAddingRole(e.target.value)}
+                      >
+                        <option value="">{t("ar.default")}</option>
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       className="primary"
                       disabled={busy || !adding}
                       onClick={() =>
                         run(async () => {
-                          await api.grantAccess(project, adding, MEMBER_PERMS);
+                          await api.grantAccess(project, adding, MEMBER_PERMS, undefined, addingRole || null);
                           setAdding("");
                         })
                       }
@@ -559,35 +661,69 @@ export function Users({
         </>
       )}
 
+      {/* Right under the table whose "Role:" pickers it fills, and for the
+          people the server lets write it (upsert_access_role in api.rs). */}
+      {(myRole === "owner" || myRole === "admin") && (
+        <AccessRoles
+          roles={roles}
+          allPerms={ALL_PERMS}
+          onChanged={async () => {
+            await load();
+            await loadGrants();
+          }}
+        />
+      )}
+
       <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>
         {teamProjects.length > 0
           ? t("team.inviteTo", { project: teamProjects.find((p) => p.id === project)?.name ?? "" })
           : t("team.invite")}
       </h2>
       <p className="hint">{t("team.inviteHint")}</p>
-      <div className="row" style={{ gap: "var(--s-2)" }}>
+      <div className="row" style={{ gap: "var(--s-2)", flexWrap: "wrap" }}>
         <input
           type="email"
+          style={{ flex: "1 1 220px" }}
           placeholder={t("auth.email")}
           value={email}
           spellCheck={false}
           onChange={(e) => setEmail(e.target.value)}
         />
         <select style={{ width: "auto" }} value={role} onChange={(e) => setRole(e.target.value)}>
-          {ROLES.map((r) => (
+          {/* An admin cannot invite another admin (create_invitation in
+              api.rs), so the option is not offered to them. */}
+          {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
             <option key={r} value={r}>
               {t(roleKey(r))}
             </option>
           ))}
         </select>
+        {roles.length > 0 && teamProjects.length > 0 && role !== "admin" && (
+          <select
+            style={{ width: "auto" }}
+            value={inviteRole}
+            aria-label={t("ar.inRow")}
+            onChange={(e) => setInviteRole(e.target.value)}
+          >
+            <option value="">{t("ar.default")}</option>
+            {roles.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           className="primary"
           disabled={busy || !email.includes("@")}
           onClick={() =>
             run(async () => {
               const out = await api.invite(email, role);
-              if (project) rememberInvite(email, project);
-              setCode({ code: out.code, email });
+              if (project) rememberInvite(email, project, role !== "admin" ? inviteRole : "");
+              setCode({ code: out.code, email, hours: out.expires_in_hours });
+              setCopied(null);
+              setSending(false);
+              setTextCopied(null);
               setEmail("");
             })
           }
@@ -595,19 +731,119 @@ export function Users({
           {t("team.sendInvite")}
         </button>
       </div>
+      <p className="hint small">{t(roleWhat(role))}</p>
       {teamProjects.length > 0 && <p className="hint small">{t("team.inviteToHint")}</p>}
 
       {code && (
-        <div className="notice" role="status" style={{ marginTop: "var(--s-3)" }}>
-          <div>
+        <div className="notice" role="status" style={{ marginTop: "var(--s-3)", alignItems: "flex-start" }}>
+          <div style={{ flex: 1 }}>
             <div>{t("team.codeFor", { email: code.email })}</div>
             {/* Shown once. The server keeps only a hash of it. */}
-            <div className="mono" style={{ fontSize: 16, margin: "var(--s-2) 0" }}>
-              {code.code}
+            <div className="row" style={{ gap: "var(--s-2) var(--s-3)", margin: "var(--s-2) 0", flexWrap: "wrap" }}>
+              {/* One line: a code broken across lines gets retyped with the break. */}
+              <span className="mono" style={{ fontSize: 16, userSelect: "all", whiteSpace: "nowrap" }}>
+                {code.code}
+              </span>
+              <button
+                className="alt"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(code.code);
+                    setCopied("copied");
+                    window.setTimeout(() => setCopied((c) => (c === "copied" ? null : c)), 2000);
+                  } catch {
+                    // Said out loud: this code cannot be shown a second time,
+                    // so a button that silently did nothing would be believed.
+                    setCopied("failed");
+                  }
+                }}
+              >
+                {copied === "copied" ? t("pw.copied") : t("pw.copy")}
+              </button>
+              <button className="alt" aria-expanded={sending} onClick={() => setSending((s) => !s)}>
+                {t("team.send")}
+              </button>
             </div>
+            {copied === "failed" && <div className="small">{t("team.copyFailed")}</div>}
             <div className="muted small">{t("team.codeOnce")}</div>
+            {sending && (() => {
+              // Everything the person needs on the other end, in the order
+              // the screens ask for it: where to get Fury, which button,
+              // which server, the code, the password warning, and that they
+              // still have to be let in -- the step a newcomer cannot see.
+              const text = t("team.msgBody", {
+                email: code.email,
+                server: (serverUrl ?? "").replace(/\/+$/, ""),
+                code: code.code,
+                hours: code.hours,
+              });
+              const subject = t("team.msgSubject");
+              return (
+                <div style={{ marginTop: "var(--s-3)" }}>
+                  <div className="small" style={{ marginBottom: "var(--s-1)" }}>
+                    {t("team.sendHint", { email: code.email })}
+                  </div>
+                  <textarea
+                    readOnly
+                    rows={13}
+                    value={text}
+                    style={{ width: "100%", fontSize: 12 }}
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  <div className="row" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", flexWrap: "wrap" }}>
+                    <button
+                      className="alt"
+                      onClick={() =>
+                        void api
+                          .openUrl(
+                            `mailto:${encodeURIComponent(code.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`,
+                          )
+                          .catch((e) => setError(say(e)))
+                      }
+                    >
+                      {t("team.sendMail")}
+                    </button>
+                    <button
+                      className="alt"
+                      onClick={() =>
+                        void api
+                          .openUrl(
+                            `https://t.me/share/url?url=${encodeURIComponent(FURY_SITE)}&text=${encodeURIComponent(text)}`,
+                          )
+                          .catch((e) => setError(say(e)))
+                      }
+                    >
+                      {t("team.sendTelegram")}
+                    </button>
+                    <button
+                      className="alt"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(text);
+                          setTextCopied("copied");
+                          window.setTimeout(() => setTextCopied((c) => (c === "copied" ? null : c)), 2000);
+                        } catch {
+                          setTextCopied("failed");
+                        }
+                      }}
+                    >
+                      {textCopied === "copied" ? t("team.textCopied") : t("team.copyText")}
+                    </button>
+                  </div>
+                  {textCopied === "failed" && <div className="small">{t("team.copyTextFailed")}</div>}
+                </div>
+              );
+            })()}
           </div>
-          <button className="ghost" onClick={() => setCode(null)}>
+          <button
+            className="ghost"
+            onClick={() => {
+              setCode(null);
+              setCopied(null);
+              setSending(false);
+              setTextCopied(null);
+            }}
+          >
             {t("app.dismiss")}
           </button>
         </div>
@@ -707,6 +943,22 @@ function roleKey(role: string): "role.owner" | "role.admin" | "role.manager" | "
   }
 }
 
+/** What a role means, in the words of the server's checks: api.rs
+ *  (create_project, create_invitation, hand_over_key, set_member_role,
+ *  list_audit), security.rs (put_policy) and role_ceiling in shared-rs. */
+function roleWhat(role: string): "role.ownerWhat" | "role.adminWhat" | "role.managerWhat" | "role.memberWhat" {
+  switch (role) {
+    case "owner":
+      return "role.ownerWhat";
+    case "admin":
+      return "role.adminWhat";
+    case "manager":
+      return "role.managerWhat";
+    default:
+      return "role.memberWhat";
+  }
+}
+
 /** Which projects somebody was invited into, remembered on this machine until
  *  they are let in, so the Let in dialog has those projects ticked already.
  *  Local, because it is a convenience for the person who sent the invite and
@@ -722,13 +974,30 @@ function invitedFor(email: string): string[] {
   }
 }
 
-function rememberInvite(email: string, project: string) {
+function rememberInvite(email: string, project: string, accessRole: string) {
   try {
     const all = JSON.parse(localStorage.getItem(INVITED) ?? "{}") as Record<string, string[]>;
     const key = email.toLowerCase();
     all[key] = Array.from(new Set([...(all[key] ?? []), project]));
     localStorage.setItem(INVITED, JSON.stringify(all));
+    const roles = JSON.parse(localStorage.getItem(INVITED_ROLE) ?? "{}") as Record<string, string>;
+    roles[key] = accessRole;
+    localStorage.setItem(INVITED_ROLE, JSON.stringify(roles));
   } catch {
     // A private window: the project is simply not pre-ticked.
+  }
+}
+
+/** The organisation role the invitation was sent on, kept beside the projects
+ *  and for the same reason. One that has since been deleted is dropped. */
+const INVITED_ROLE = "fury.invitedRole";
+
+function invitedRole(email: string, roles: AccessRole[]): string {
+  try {
+    const all = JSON.parse(localStorage.getItem(INVITED_ROLE) ?? "{}") as Record<string, string>;
+    const id = all[email.toLowerCase()] ?? "";
+    return roles.some((r) => r.id === id) ? id : "";
+  } catch {
+    return "";
   }
 }
