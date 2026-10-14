@@ -17,6 +17,20 @@ type Grants = Awaited<ReturnType<typeof api.grants>>;
 
 const ROLES = ["admin", "manager", "member"] as const;
 
+/** The page's tabs, in order. The last three are the owner's and admins'
+ *  business; the server refuses everybody else there anyway. */
+type UsersTab = "team" | "access" | "roles" | "sites" | "security" | "audit";
+const TAB_LABEL: Record<UsersTab, Key> = {
+  team: "team.tabTeam",
+  access: "team.tabAccess",
+  roles: "team.tabRoles",
+  sites: "team.tabSites",
+  security: "team.tabSecurity",
+  audit: "team.tabAudit",
+};
+/** The tab last open, so coming back to Users lands where one left. */
+const TAB_KEY = "fury.usersTab";
+
 /** Where a newcomer downloads Fury, in the instructions sent with a code. */
 const FURY_SITE = "https://furybrowser.dev";
 
@@ -83,6 +97,23 @@ export function Users({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string>("member");
   const [code, setCode] = useState<{ code: string; email: string; hours: number } | null>(null);
+  const [tabState, setTabState] = useState<UsersTab>(() => {
+    try {
+      return (localStorage.getItem(TAB_KEY) as UsersTab | null) ?? "team";
+    } catch {
+      return "team";
+    }
+  });
+  const pickTab = (x: UsersTab) => {
+    setTabState(x);
+    try {
+      localStorage.setItem(TAB_KEY, x);
+    } catch {
+      // A private window: the tab is simply not remembered.
+    }
+  };
+  // The invitation form, opened by its button rather than always on show.
+  const [inviting, setInviting] = useState(false);
   // "copied" for two seconds, "failed" until the code goes away.
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   // The instructions to send with the code, open under it; and the same
@@ -117,6 +148,9 @@ export function Users({
    *  error about a folder sitting in front of them. */
   const teamProjects = projects.filter((p) => p.origin === "team");
   const [project, setProject] = useState<string>(teamProjects[0]?.id ?? "");
+  // Which project an invitation pre-ticks for Let in; its own picker on the
+  // Team tab, starting from the first project.
+  const [inviteProject, setInviteProject] = useState<string>(teamProjects[0]?.id ?? "");
   const [grants, setGrants] = useState<Grants | null>(null);
   // Whom the "add from the team" picker has chosen, and on which of the
   // organisation's roles ("" is MEMBER_PERMS).
@@ -149,6 +183,9 @@ export function Users({
   useEffect(() => {
     if (!teamProjects.some((p) => p.id === project)) {
       setProject(teamProjects[0]?.id ?? "");
+    }
+    if (inviteProject && !teamProjects.some((p) => p.id === inviteProject)) {
+      setInviteProject(teamProjects[0]?.id ?? "");
     }
   }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -230,6 +267,15 @@ export function Users({
   }
 
   const myRole = team.members.find((m) => m.is_you)?.role;
+  const isAdmin = myRole === "owner" || myRole === "admin";
+  const me = team.members.find((m) => m.is_you);
+  // Enrolled and not yet let in: the one thing on this page that waits on
+  // the person reading it, so it is counted on the Team tab.
+  const waiting = team.members.filter((m) => !m.has_key).length;
+  const tabs: UsersTab[] = isAdmin
+    ? ["team", "access", "roles", "sites", "security", "audit"]
+    : ["team", "access", "roles"];
+  const tab = tabs.includes(tabState) ? tabState : "team";
 
   const openAdmit = (member: Members["members"][number], picked: Set<string>) => {
     setAdmitting({ member, picked, accessRole: invitedRole(member.email, roles), code: null, confirmed: false });
@@ -356,550 +402,659 @@ export function Users({
       )}
       {error && <p className="error">{error}</p>}
 
-      {/* The sequence, stated.
-          This screen used to show a form and not a path: inviting is one of
-          four steps, and the other three appear as buttons on a member's row —
-          so an owner who is still the only member never saw them and could not
-          tell what happens after they send a code. */}
-      <ol className="steps">
-        <li>{t("team.how1")}</li>
-        <li>{t("team.how2")}</li>
-        <li>{t("team.how3")}</li>
-        <li>{t("team.how4")}</li>
-      </ol>
+      {/* Tabs rather than one long page (the owner, 14.10.2026): the team,
+          who reaches which project, what the roles mean, and the owner's and
+          admins' own business -- sites, security, the log -- each on its own,
+          so that each answers one question. Signing out sits at the end of the
+          bar, where it is found without scrolling past everything. */}
+      <div className="tabs pageTabs" role="tablist">
+        {tabs.map((x) => (
+          <button key={x} role="tab" aria-selected={tab === x} onClick={() => pickTab(x)}>
+            {t(TAB_LABEL[x])}
+            {x === "team" && waiting > 0 && <span className="tabBadge">{waiting}</span>}
+          </button>
+        ))}
+        <div className="spacer" />
+        <span className="muted small pageTabsWho">{me?.email}</span>
+        <button className="ghost small" onClick={onSignOut}>
+          {t("app.signOut")}
+        </button>
+      </div>
 
-      {/* Two sections, in the order an owner thinks in (the owner's own
-          sketch, 08.10.2026): the team first -- who is in it, as what, holding
-          the key -- and then one project at a time, with who works in it and
-          what each may do, ticked in the row. People are added to a project
-          from the team, or invited into it from outside. It used to be one
-          table answering both questions, its project chosen in a dropdown
-          under it, and an owner asked why he could not simply pick people
-          already in the team and add them. */}
-      <h2 className="sectionTitle">{t("team.people")}</h2>
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>{t("team.member")}</th>
-            <th>{t("team.role")}</th>
-            <th>{t("team.key")}</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {team.members.map((m) => (
-            <tr key={m.user_id}>
-              <td>
-                <div className="name">{m.email}</div>
-                {m.is_you && <div className="muted small">{t("team.you")}</div>}
-              </td>
-              <td className="muted">
-                {/* A select only where the server would accept the change
-                    (api.rs, set_member_role): never the owner, never yourself,
-                    and an admin handles managers and members only. */}
-                {canChangeRole(myRole, m) ? (
-                  <select
-                    style={{ width: "auto" }}
-                    value={m.role}
-                    disabled={busy}
-                    aria-label={t("team.role")}
-                    onChange={async (e) => {
-                      const to = e.target.value;
-                      if (to === "admin") {
-                        const go = await ask({
-                          title: t("team.makeAdmin", { email: m.email }),
-                          detail: t("team.makeAdminDetail"),
-                          confirmLabel: t("team.makeAdminConfirm"),
-                        });
-                        if (go === null) return;
-                      }
-                      await run(() => withStepUp(ask, t, () => api.setMemberRole(m.user_id, to)));
+      <div className="tabBody">
+      {tab === "team" && (
+        <>
+          {/* The four steps, large, while there is nobody to apply them to;
+              folded away once the team exists and they are known. */}
+          {team.members.length === 1 ? (
+            <div className="panel">
+              <div className="panelTitle">{t("team.howTitle")}</div>
+              <ol className="steps" style={{ margin: 0 }}>
+                <li>{t("team.how1")}</li>
+                <li>{t("team.how2")}</li>
+                <li>{t("team.how3")}</li>
+                <li>{t("team.how4")}</li>
+              </ol>
+            </div>
+          ) : null}
+
+          <div className="toolbarRow">
+            <h2 className="sectionTitle" style={{ margin: 0 }}>
+              {t("team.people")} <span className="count">{team.members.length}</span>
+            </h2>
+            <div className="spacer" />
+            {!inviting && !code && (
+              <button className="primary" onClick={() => setInviting(true)}>
+                {t("team.inviteButton")}
+              </button>
+            )}
+          </div>
+
+          {waiting > 0 && !inviting && !code && (
+            <p className="hint small" style={{ marginTop: 0 }}>{t("team.waitingNote", { n: waiting })}</p>
+          )}
+
+          {(inviting || code) && (
+            <div className="panel">
+              <div className="toolbarRow" style={{ marginBottom: "var(--s-2)" }}>
+                <div className="panelTitle" style={{ margin: 0 }}>{t("team.invite")}</div>
+                <div className="spacer" />
+                {!code && (
+                  <button className="ghost small" onClick={() => setInviting(false)}>
+                    {t("ui.cancel")}
+                  </button>
+                )}
+              </div>
+              {!code && (
+                <>
+                  <p className="hint small" style={{ marginTop: 0 }}>{t("team.inviteHint")}</p>
+                  {/* Labelled fields in one row, the button under them: four
+                      unlabelled boxes and a button that wrapped to a line of
+                      its own read as a filter bar, not a form. */}
+                  <div className="inviteGrid">
+                    <label>
+                      <span>{t("team.emailLabel")}</span>
+                      <input
+                        type="email"
+                        placeholder="name@example.com"
+                        value={email}
+                        spellCheck={false}
+                        autoFocus
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>{t("team.role")}</span>
+                      <select value={role} onChange={(e) => setRole(e.target.value)}>
+                        {/* An admin cannot invite another admin (create_invitation
+                            in api.rs), so the option is not offered to them. */}
+                        {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
+                          <option key={r} value={r}>
+                            {t(roleKey(r))}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {teamProjects.length > 0 && role !== "admin" && (
+                      <label>
+                        <span>{t("team.inviteProject")}</span>
+                        <select value={inviteProject} onChange={(e) => setInviteProject(e.target.value)}>
+                          <option value="">{t("team.inviteNoProject")}</option>
+                          {teamProjects.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {roles.length > 0 && inviteProject && role !== "admin" && (
+                      <label>
+                        <span>{t("team.inviteRights")}</span>
+                        <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                          <option value="">{t("ar.default")}</option>
+                          {roles.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                  <p className="hint small">
+                    {t(roleWhat(role))}
+                    {inviteProject && role !== "admin" ? " " + t("team.inviteToHint") : ""}
+                  </p>
+                  <button
+                    className="primary"
+                    disabled={busy || !email.includes("@")}
+                    onClick={() =>
+                      run(async () => {
+                        const out = await api.invite(email, role);
+                        if (inviteProject && role !== "admin") rememberInvite(email, inviteProject, inviteRole);
+                        setCode({ code: out.code, email, hours: out.expires_in_hours });
+                        setCopied(null);
+                        setSending(false);
+                        setTextCopied(null);
+                        setEmail("");
+                      })
+                    }
+                  >
+                    {t("team.sendInvite")}
+                  </button>
+                </>
+              )}
+              {code && (
+                <div className="notice" role="status" style={{ marginTop: "var(--s-3)", alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div>{t("team.codeFor", { email: code.email })}</div>
+                    {/* Shown once. The server keeps only a hash of it. */}
+                    <div className="row" style={{ gap: "var(--s-2) var(--s-3)", margin: "var(--s-2) 0", flexWrap: "wrap" }}>
+                      {/* One line: a code broken across lines gets retyped with the break. */}
+                      <span className="mono" style={{ fontSize: 16, userSelect: "all", whiteSpace: "nowrap" }}>
+                        {code.code}
+                      </span>
+                      <button
+                        className="alt"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(code.code);
+                            setCopied("copied");
+                            window.setTimeout(() => setCopied((c) => (c === "copied" ? null : c)), 2000);
+                          } catch {
+                            // Said out loud: this code cannot be shown a second time,
+                            // so a button that silently did nothing would be believed.
+                            setCopied("failed");
+                          }
+                        }}
+                      >
+                        {copied === "copied" ? t("pw.copied") : t("pw.copy")}
+                      </button>
+                      <button className="alt" aria-expanded={sending} onClick={() => setSending((s) => !s)}>
+                        {t("team.send")}
+                      </button>
+                    </div>
+                    {copied === "failed" && <div className="small">{t("team.copyFailed")}</div>}
+                    <div className="muted small">{t("team.codeOnce")}</div>
+                    <div className={emailCheck ? "muted small" : "warn small"} style={{ marginTop: "var(--s-1)" }}>
+                      {emailCheck ? t("team.codeMailed", { email: code.email }) : t("team.codeBearer")}
+                    </div>
+                    {sending && (() => {
+                      // Everything the person needs on the other end, in the order
+                      // the screens ask for it: where to get Fury, which button,
+                      // which server, the code, the password warning, and that they
+                      // still have to be let in -- the step a newcomer cannot see.
+                      const text = t("team.msgBody", {
+                        email: code.email,
+                        server: (serverUrl ?? "").replace(/\/+$/, ""),
+                        code: code.code,
+                        hours: code.hours,
+                        letter: emailCheck ? t("team.msgLetter", { email: code.email }) : "",
+                      });
+                      const subject = t("team.msgSubject");
+                      return (
+                        <div style={{ marginTop: "var(--s-3)" }}>
+                          <div className="small" style={{ marginBottom: "var(--s-1)" }}>
+                            {t("team.sendHint", { email: code.email })}
+                          </div>
+                          <textarea
+                            readOnly
+                            rows={13}
+                            value={text}
+                            style={{ width: "100%", fontSize: 12 }}
+                            onFocus={(e) => e.currentTarget.select()}
+                          />
+                          <div className="row" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", flexWrap: "wrap" }}>
+                            <button
+                              className="alt"
+                              onClick={() =>
+                                void api
+                                  .openUrl(
+                                    `mailto:${encodeURIComponent(code.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`,
+                                  )
+                                  .catch((e) => setError(say(e)))
+                              }
+                            >
+                              {t("team.sendMail")}
+                            </button>
+                            <button
+                              className="alt"
+                              onClick={() =>
+                                void api
+                                  .openUrl(
+                                    `https://t.me/share/url?url=${encodeURIComponent(FURY_SITE)}&text=${encodeURIComponent(text)}`,
+                                  )
+                                  .catch((e) => setError(say(e)))
+                              }
+                            >
+                              {t("team.sendTelegram")}
+                            </button>
+                            <button
+                              className="alt"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(text);
+                                  setTextCopied("copied");
+                                  window.setTimeout(() => setTextCopied((c) => (c === "copied" ? null : c)), 2000);
+                                } catch {
+                                  setTextCopied("failed");
+                                }
+                              }}
+                            >
+                              {textCopied === "copied" ? t("team.textCopied") : t("team.copyText")}
+                            </button>
+                          </div>
+                          {textCopied === "failed" && <div className="small">{t("team.copyTextFailed")}</div>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      setCode(null);
+                      setCopied(null);
+                      setSending(false);
+                      setTextCopied(null);
+                      setInviting(false);
                     }}
                   >
-                    {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
-                      <option key={r} value={r}>
-                        {t(roleKey(r))}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span title={t(roleWhat(m.role))}>{t(roleKey(m.role))}</span>
-                )}
-              </td>
-              <td>
-                {m.has_key ? (
-                  <span className="state free">{t("team.hasKey")}</span>
-                ) : (
-                  <span className="state lock">{t("team.waitingForKey")}</span>
-                )}
-              </td>
-              <td className="actions">
-                <div>
-                  {/* Letting somebody in hands over the key and asks which
-                      projects to open; a project they were invited into is
-                      already ticked. Which folders is asked, not assumed: a
-                      tester who invited somebody for one client found them
-                      looking at all of them (01.10.2026). */}
-                  {!m.has_key && (
-                    <button
-                      disabled={busy}
-                      onClick={() =>
-                        teamProjects.length > 0
-                          ? openAdmit(m, new Set(invitedFor(m.email)))
-                          : openAdmit(m, new Set())
-                      }
-                    >
-                      {teamProjects.length > 0 ? t("team.letIn") : t("team.giveKey")}
-                    </button>
-                  )}
-                  {!m.is_you && (
-                    <button
-                      className="danger"
-                      disabled={busy}
-                      onClick={async () => {
-                        const go = await ask({
-                          title: t("team.remove"),
-                          detail: t("team.confirmRemove", { email: m.email }),
-                          confirmLabel: t("team.remove"),
-                          danger: true,
-                        });
-                        if (go === null) return;
-                        await run(() => withStepUp(ask, t, () => api.removeMember(m.user_id)));
-                      }}
-                    >
-                      {t("team.removeShort")}
-                    </button>
-                  )}
+                    {t("app.dismiss")}
+                  </button>
                 </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {team.members.length === 1 && (
-        <p className="hint" style={{ maxWidth: 620 }}>{t("team.aloneOnServer")}</p>
-      )}
+              )}
+            </div>
+          )}
 
-      <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>
-        {t("team.projectAccess")}{" "}
-        {teamProjects.length > 0 && (
-          <select
-            style={{ width: "auto", marginLeft: "var(--s-2)", textTransform: "none", letterSpacing: 0 }}
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-          >
-            {teamProjects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </h2>
-
-      {teamProjects.length === 0 ? (
-        // Said rather than left blank: with no folder on the server there is
-        // nothing to give anybody access to.
-        <p className="hint" style={{ maxWidth: 620 }}>{t("team.noTeamProjects")}</p>
-      ) : (
-        <>
           <table className="grid">
             <thead>
               <tr>
                 <th>{t("team.member")}</th>
-                <th>{t("team.rights")}</th>
+                <th>{t("team.role")}</th>
+                <th>{t("team.key")}</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {team.members
-                .filter((m) => m.role === "owner" || m.role === "admin" || granted.has(m.user_id))
-                .map((m) => {
-                  const g = grants?.granted.find((x) => x.user_id === m.user_id);
-                  const have = new Set<Perm>(g?.permissions ?? []);
-                  const attached = new Set(g?.domain_lists ?? []);
-                  const everything = m.role === "owner" || m.role === "admin";
-                  const linked = roles.find((r) => r.id === g?.access_role);
-                  return (
-                    <tr key={m.user_id}>
-                      <td style={{ minWidth: 180 }}>
-                        <div className="name">{m.email}</div>
-                        <div className="muted small">{t(roleKey(m.role))}</div>
-                      </td>
-                      <td>
-                        {everything ? (
-                          <span className="muted small">{t("team.everything")}</span>
-                        ) : (
-                          <>
-                            {/* Each box saves on change. `view` is always on:
-                                a grant without it lets somebody act on
-                                profiles they cannot see. `manage_access` is
-                                greyed for a member, because the server drops
-                                it for that role (role_ceiling). */}
-                            {/* A role's boxes are the role's: ticking one
-                                here would quietly unlink this person from it,
-                                so they are locked and "by hand" is the way out,
-                                keeping the boxes as they are. */}
-                            {roles.length > 0 && (
-                              <div className="row" style={{ gap: "var(--s-2)", marginBottom: "var(--s-2)", flexWrap: "wrap" }}>
-                                <span className="small">{t("ar.inRow")}</span>
-                                <select
-                                  style={{ width: "auto" }}
-                                  value={linked?.id ?? ""}
-                                  disabled={busy}
-                                  onChange={(e) => {
-                                    const id = e.target.value;
-                                    void run(() =>
-                                      id
-                                        ? api.grantAccess(project, m.user_id, [], undefined, id)
-                                        : api.grantAccess(project, m.user_id, g?.permissions ?? MEMBER_PERMS, undefined, null),
-                                    );
-                                  }}
-                                >
-                                  <option value="">{t("ar.manual")}</option>
-                                  {roles.map((r) => (
-                                    <option key={r.id} value={r.id}>
-                                      {r.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                {linked && <span className="muted small">{t("ar.linkedHint")}</span>}
-                              </div>
-                            )}
-                            <div className="permsGrid">
-                              {ALL_PERMS.map((p) => {
-                                const locked =
-                                  !!linked || p === "view" || (p === "manage_access" && m.role === "member");
-                                return (
-                                  <label key={p} className="row" style={{ gap: 6, alignItems: "flex-start" }}>
-                                    <input
-                                      type="checkbox"
-                                      style={{ width: 13, height: 13, marginTop: 2, accentColor: "var(--accent)" }}
-                                      checked={p === "view" || have.has(p)}
-                                      disabled={busy || locked}
-                                      onChange={(e) => {
-                                        const next = new Set(have);
-                                        next.add("view");
-                                        if (e.target.checked) next.add(p);
-                                        else next.delete(p);
-                                        void run(() =>
-                                          api.grantAccess(
-                                            project,
-                                            m.user_id,
-                                            ALL_PERMS.filter((x) => next.has(x)),
-                                            [...attached],
-                                            null,
-                                          ),
-                                        );
-                                      }}
-                                    />
-                                    <span className="small">{t(("perm." + p) as Key)}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                            {orgLists.length > 0 && (
-                              <div className="row" style={{ flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-2)" }}>
-                                <span className="muted small">{t("tdl.applies")}</span>
-                                {orgLists.map((l) => (
-                                  <label key={l.id} className="row" style={{ gap: 4 }}>
-                                    <input
-                                      type="checkbox"
-                                      style={{ width: 13, height: 13, accentColor: "var(--accent)" }}
-                                      checked={attached.has(l.id)}
-                                      disabled={busy}
-                                      onChange={(e) => {
-                                        const next = new Set(attached);
-                                        if (e.target.checked) next.add(l.id);
-                                        else next.delete(l.id);
-                                        void run(() => api.grantAccess(project, m.user_id, g?.permissions ?? MEMBER_PERMS, [...next]));
-                                      }}
-                                    />
-                                    <span className="small">{l.name}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </td>
-                      <td className="actions">
-                        {!everything && (
-                          <button
-                            className="ghost"
-                            disabled={busy}
-                            onClick={() => run(() => api.revokeAccess(project, m.user_id))}
-                          >
-                            {t("team.removeFromProject")}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-
-          {/* From the team: anybody let in, not owner or admin (they see every
-              project already), and not here yet. Somebody still waiting for
-              the key is added when they are let in, from the invite below. */}
-          {(() => {
-            const addable = team.members.filter(
-              (m) => m.has_key && m.role !== "owner" && m.role !== "admin" && !granted.has(m.user_id),
-            );
-            return (
-              <div className="row" style={{ marginTop: "var(--s-3)", gap: "var(--s-2)", flexWrap: "wrap" }}>
-                <span className="small">{t("team.addFromTeam")}</span>
-                {addable.length > 0 ? (
-                  <>
-                    <select
-                      style={{ width: "auto" }}
-                      value={adding}
-                      onChange={(e) => setAdding(e.target.value)}
-                    >
-                      <option value="">{t("team.pickMember")}</option>
-                      {addable.map((m) => (
-                        <option key={m.user_id} value={m.user_id}>
-                          {m.email}
-                        </option>
-                      ))}
-                    </select>
-                    {roles.length > 0 && (
+              {team.members.map((m) => (
+                <tr key={m.user_id}>
+                  <td>
+                    <div className="name">{m.email}</div>
+                    {m.is_you && <div className="muted small">{t("team.you")}</div>}
+                  </td>
+                  <td className="muted">
+                    {/* A select only where the server would accept the change
+                        (api.rs, set_member_role): never the owner, never yourself,
+                        and an admin handles managers and members only. */}
+                    {canChangeRole(myRole, m) ? (
                       <select
                         style={{ width: "auto" }}
-                        value={addingRole}
-                        aria-label={t("ar.inRow")}
-                        onChange={(e) => setAddingRole(e.target.value)}
+                        value={m.role}
+                        disabled={busy}
+                        aria-label={t("team.role")}
+                        onChange={async (e) => {
+                          const to = e.target.value;
+                          if (to === "admin") {
+                            const go = await ask({
+                              title: t("team.makeAdmin", { email: m.email }),
+                              detail: t("team.makeAdminDetail"),
+                              confirmLabel: t("team.makeAdminConfirm"),
+                            });
+                            if (go === null) return;
+                          }
+                          await run(() => withStepUp(ask, t, () => api.setMemberRole(m.user_id, to)));
+                        }}
                       >
-                        <option value="">{t("ar.default")}</option>
-                        {roles.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
+                        {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
+                          <option key={r} value={r}>
+                            {t(roleKey(r))}
                           </option>
                         ))}
                       </select>
+                    ) : (
+                      <span title={t(roleWhat(m.role))}>{t(roleKey(m.role))}</span>
                     )}
-                    <button
-                      className="primary"
-                      disabled={busy || !adding}
-                      onClick={() =>
-                        run(async () => {
-                          await api.grantAccess(project, adding, MEMBER_PERMS, undefined, addingRole || null);
-                          setAdding("");
-                        })
-                      }
-                    >
-                      {t("team.add")}
-                    </button>
-                  </>
-                ) : (
-                  <span className="muted small">{t("team.nobodyToAdd")}</span>
-                )}
-              </div>
-            );
-          })()}
+                  </td>
+                  <td>
+                    {m.has_key ? (
+                      <span className="state free">{t("team.hasKey")}</span>
+                    ) : (
+                      <span className="state lock">{t("team.waitingForKey")}</span>
+                    )}
+                  </td>
+                  <td className="actions">
+                    <div>
+                      {/* Letting somebody in hands over the key and asks which
+                          projects to open; a project they were invited into is
+                          already ticked. Which folders is asked, not assumed: a
+                          tester who invited somebody for one client found them
+                          looking at all of them (01.10.2026). */}
+                      {!m.has_key && (
+                        <button
+                          disabled={busy}
+                          onClick={() =>
+                            teamProjects.length > 0
+                              ? openAdmit(m, new Set(invitedFor(m.email)))
+                              : openAdmit(m, new Set())
+                          }
+                        >
+                          {teamProjects.length > 0 ? t("team.letIn") : t("team.giveKey")}
+                        </button>
+                      )}
+                      {!m.is_you && (
+                        <button
+                          className="ghost danger"
+                          disabled={busy}
+                          onClick={async () => {
+                            const go = await ask({
+                              title: t("team.remove"),
+                              detail: t("team.confirmRemove", { email: m.email }),
+                              confirmLabel: t("team.remove"),
+                              danger: true,
+                            });
+                            if (go === null) return;
+                            await run(() => withStepUp(ask, t, () => api.removeMember(m.user_id)));
+                          }}
+                        >
+                          {t("team.removeShort")}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {team.invited.length > 0 && (
+            <>
+              <h2 className="sectionTitle" style={{ marginTop: "var(--s-5)" }}>
+                {t("team.pending")}
+              </h2>
+              <table className="grid">
+                <tbody>
+                  {team.invited.map((i) => (
+                    <tr key={i.email}>
+                      <td>{i.email}</td>
+                      <td className="muted">{t(roleKey(i.role))}</td>
+                      <td className="muted small">
+                        {t("team.expires", { when: new Date(i.expires_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {team.members.length > 1 && (
+            <details className="howTo">
+              <summary>{t("team.howTitle")}</summary>
+              <ol className="steps">
+                <li>{t("team.how1")}</li>
+                <li>{t("team.how2")}</li>
+                <li>{t("team.how3")}</li>
+                <li>{t("team.how4")}</li>
+              </ol>
+            </details>
+          )}
         </>
       )}
 
-      {/* Right under the table whose "Role:" pickers it fills, and for the
-          people the server lets write it (upsert_access_role in api.rs). */}
-      {(myRole === "owner" || myRole === "admin") && (
-        <AccessRoles
-          roles={roles}
-          allPerms={ALL_PERMS}
-          onChanged={async () => {
-            await load();
-            await loadGrants();
-          }}
-        />
-      )}
-
-      <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>
-        {teamProjects.length > 0
-          ? t("team.inviteTo", { project: teamProjects.find((p) => p.id === project)?.name ?? "" })
-          : t("team.invite")}
-      </h2>
-      <p className="hint">{t("team.inviteHint")}</p>
-      <div className="row" style={{ gap: "var(--s-2)", flexWrap: "wrap" }}>
-        <input
-          type="email"
-          style={{ flex: "1 1 220px" }}
-          placeholder={t("auth.email")}
-          value={email}
-          spellCheck={false}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <select style={{ width: "auto" }} value={role} onChange={(e) => setRole(e.target.value)}>
-          {/* An admin cannot invite another admin (create_invitation in
-              api.rs), so the option is not offered to them. */}
-          {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
-            <option key={r} value={r}>
-              {t(roleKey(r))}
-            </option>
-          ))}
-        </select>
-        {roles.length > 0 && teamProjects.length > 0 && role !== "admin" && (
-          <select
-            style={{ width: "auto" }}
-            value={inviteRole}
-            aria-label={t("ar.inRow")}
-            onChange={(e) => setInviteRole(e.target.value)}
-          >
-            <option value="">{t("ar.default")}</option>
-            {roles.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <button
-          className="primary"
-          disabled={busy || !email.includes("@")}
-          onClick={() =>
-            run(async () => {
-              const out = await api.invite(email, role);
-              if (project) rememberInvite(email, project, role !== "admin" ? inviteRole : "");
-              setCode({ code: out.code, email, hours: out.expires_in_hours });
-              setCopied(null);
-              setSending(false);
-              setTextCopied(null);
-              setEmail("");
-            })
-          }
-        >
-          {t("team.sendInvite")}
-        </button>
-      </div>
-      <p className="hint small">{t(roleWhat(role))}</p>
-      {teamProjects.length > 0 && <p className="hint small">{t("team.inviteToHint")}</p>}
-
-      {code && (
-        <div className="notice" role="status" style={{ marginTop: "var(--s-3)", alignItems: "flex-start" }}>
-          <div style={{ flex: 1 }}>
-            <div>{t("team.codeFor", { email: code.email })}</div>
-            {/* Shown once. The server keeps only a hash of it. */}
-            <div className="row" style={{ gap: "var(--s-2) var(--s-3)", margin: "var(--s-2) 0", flexWrap: "wrap" }}>
-              {/* One line: a code broken across lines gets retyped with the break. */}
-              <span className="mono" style={{ fontSize: 16, userSelect: "all", whiteSpace: "nowrap" }}>
-                {code.code}
-              </span>
-              <button
-                className="alt"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(code.code);
-                    setCopied("copied");
-                    window.setTimeout(() => setCopied((c) => (c === "copied" ? null : c)), 2000);
-                  } catch {
-                    // Said out loud: this code cannot be shown a second time,
-                    // so a button that silently did nothing would be believed.
-                    setCopied("failed");
-                  }
-                }}
-              >
-                {copied === "copied" ? t("pw.copied") : t("pw.copy")}
-              </button>
-              <button className="alt" aria-expanded={sending} onClick={() => setSending((s) => !s)}>
-                {t("team.send")}
-              </button>
-            </div>
-            {copied === "failed" && <div className="small">{t("team.copyFailed")}</div>}
-            <div className="muted small">{t("team.codeOnce")}</div>
-            <div className={emailCheck ? "muted small" : "warn small"} style={{ marginTop: "var(--s-1)" }}>
-              {emailCheck ? t("team.codeMailed", { email: code.email }) : t("team.codeBearer")}
-            </div>
-            {sending && (() => {
-              // Everything the person needs on the other end, in the order
-              // the screens ask for it: where to get Fury, which button,
-              // which server, the code, the password warning, and that they
-              // still have to be let in -- the step a newcomer cannot see.
-              const text = t("team.msgBody", {
-                email: code.email,
-                server: (serverUrl ?? "").replace(/\/+$/, ""),
-                code: code.code,
-                hours: code.hours,
-                letter: emailCheck ? t("team.msgLetter", { email: code.email }) : "",
-              });
-              const subject = t("team.msgSubject");
-              return (
-                <div style={{ marginTop: "var(--s-3)" }}>
-                  <div className="small" style={{ marginBottom: "var(--s-1)" }}>
-                    {t("team.sendHint", { email: code.email })}
-                  </div>
-                  <textarea
-                    readOnly
-                    rows={13}
-                    value={text}
-                    style={{ width: "100%", fontSize: 12 }}
-                    onFocus={(e) => e.currentTarget.select()}
-                  />
-                  <div className="row" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", flexWrap: "wrap" }}>
-                    <button
-                      className="alt"
-                      onClick={() =>
-                        void api
-                          .openUrl(
-                            `mailto:${encodeURIComponent(code.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`,
-                          )
-                          .catch((e) => setError(say(e)))
-                      }
-                    >
-                      {t("team.sendMail")}
-                    </button>
-                    <button
-                      className="alt"
-                      onClick={() =>
-                        void api
-                          .openUrl(
-                            `https://t.me/share/url?url=${encodeURIComponent(FURY_SITE)}&text=${encodeURIComponent(text)}`,
-                          )
-                          .catch((e) => setError(say(e)))
-                      }
-                    >
-                      {t("team.sendTelegram")}
-                    </button>
-                    <button
-                      className="alt"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(text);
-                          setTextCopied("copied");
-                          window.setTimeout(() => setTextCopied((c) => (c === "copied" ? null : c)), 2000);
-                        } catch {
-                          setTextCopied("failed");
-                        }
-                      }}
-                    >
-                      {textCopied === "copied" ? t("team.textCopied") : t("team.copyText")}
-                    </button>
-                  </div>
-                  {textCopied === "failed" && <div className="small">{t("team.copyTextFailed")}</div>}
-                </div>
-              );
-            })()}
+      {tab === "access" && (
+        <>
+          <div className="toolbarRow">
+            <span className="small">{t("team.projectPick")}</span>
+            {teamProjects.length > 0 && (
+              <select style={{ width: "auto" }} value={project} onChange={(e) => setProject(e.target.value)}>
+                {teamProjects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-          <button
-            className="ghost"
-            onClick={() => {
-              setCode(null);
-              setCopied(null);
-              setSending(false);
-              setTextCopied(null);
-            }}
-          >
-            {t("app.dismiss")}
-          </button>
-        </div>
+          <p className="hint small" style={{ marginTop: 0 }}>{t("team.accessHint")}</p>
+          {teamProjects.length === 0 ? (
+            // Said rather than left blank: with no folder on the server there is
+            // nothing to give anybody access to.
+            <p className="hint" style={{ maxWidth: 620 }}>{t("team.noTeamProjects")}</p>
+          ) : (
+            <>
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>{t("team.member")}</th>
+                    <th>{t("team.rights")}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {team.members
+                    .filter((m) => m.role === "owner" || m.role === "admin" || granted.has(m.user_id))
+                    .map((m) => {
+                      const g = grants?.granted.find((x) => x.user_id === m.user_id);
+                      const have = new Set<Perm>(g?.permissions ?? []);
+                      const attached = new Set(g?.domain_lists ?? []);
+                      const everything = m.role === "owner" || m.role === "admin";
+                      const linked = roles.find((r) => r.id === g?.access_role);
+                      return (
+                        <tr key={m.user_id}>
+                          <td style={{ minWidth: 180 }}>
+                            <div className="name">{m.email}</div>
+                            <div className="muted small">{t(roleKey(m.role))}</div>
+                          </td>
+                          <td>
+                            {everything ? (
+                              <span className="muted small">{t("team.everything")}</span>
+                            ) : (
+                              <>
+                                {/* Each box saves on change. `view` is always on:
+                                    a grant without it lets somebody act on
+                                    profiles they cannot see. `manage_access` is
+                                    greyed for a member, because the server drops
+                                    it for that role (role_ceiling). */}
+                                {/* A role's boxes are the role's: ticking one
+                                    here would quietly unlink this person from it,
+                                    so they are locked and "by hand" is the way out,
+                                    keeping the boxes as they are. */}
+                                {roles.length > 0 && (
+                                  <div className="row" style={{ gap: "var(--s-2)", marginBottom: "var(--s-2)", flexWrap: "wrap" }}>
+                                    <span className="small">{t("ar.inRow")}</span>
+                                    <select
+                                      style={{ width: "auto" }}
+                                      value={linked?.id ?? ""}
+                                      disabled={busy}
+                                      onChange={(e) => {
+                                        const id = e.target.value;
+                                        void run(() =>
+                                          id
+                                            ? api.grantAccess(project, m.user_id, [], undefined, id)
+                                            : api.grantAccess(project, m.user_id, g?.permissions ?? MEMBER_PERMS, undefined, null),
+                                        );
+                                      }}
+                                    >
+                                      <option value="">{t("ar.manual")}</option>
+                                      {roles.map((r) => (
+                                        <option key={r.id} value={r.id}>
+                                          {r.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    {linked && <span className="muted small">{t("ar.linkedHint")}</span>}
+                                  </div>
+                                )}
+                                <div className="permsGrid">
+                                  {ALL_PERMS.map((p) => {
+                                    const locked =
+                                      !!linked || p === "view" || (p === "manage_access" && m.role === "member");
+                                    return (
+                                      <label key={p} className="row" style={{ gap: 6, alignItems: "flex-start" }}>
+                                        <input
+                                          type="checkbox"
+                                          style={{ width: 13, height: 13, marginTop: 2, accentColor: "var(--accent)" }}
+                                          checked={p === "view" || have.has(p)}
+                                          disabled={busy || locked}
+                                          onChange={(e) => {
+                                            const next = new Set(have);
+                                            next.add("view");
+                                            if (e.target.checked) next.add(p);
+                                            else next.delete(p);
+                                            void run(() =>
+                                              api.grantAccess(
+                                                project,
+                                                m.user_id,
+                                                ALL_PERMS.filter((x) => next.has(x)),
+                                                [...attached],
+                                                null,
+                                              ),
+                                            );
+                                          }}
+                                        />
+                                        <span className="small">{t(("perm." + p) as Key)}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                {orgLists.length > 0 && (
+                                  <div className="row" style={{ flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-2)" }}>
+                                    <span className="muted small">{t("tdl.applies")}</span>
+                                    {orgLists.map((l) => (
+                                      <label key={l.id} className="row" style={{ gap: 4 }}>
+                                        <input
+                                          type="checkbox"
+                                          style={{ width: 13, height: 13, accentColor: "var(--accent)" }}
+                                          checked={attached.has(l.id)}
+                                          disabled={busy}
+                                          onChange={(e) => {
+                                            const next = new Set(attached);
+                                            if (e.target.checked) next.add(l.id);
+                                            else next.delete(l.id);
+                                            void run(() => api.grantAccess(project, m.user_id, g?.permissions ?? MEMBER_PERMS, [...next]));
+                                          }}
+                                        />
+                                        <span className="small">{l.name}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </td>
+                          <td className="actions">
+                            {!everything && (
+                              <button
+                                className="ghost"
+                                disabled={busy}
+                                onClick={() => run(() => api.revokeAccess(project, m.user_id))}
+                              >
+                                {t("team.removeFromProject")}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+
+              {/* From the team: anybody let in, not owner or admin (they see every
+                  project already), and not here yet. Somebody still waiting for
+                  the key is added when they are let in, from the invite below. */}
+              {(() => {
+                const addable = team.members.filter(
+                  (m) => m.has_key && m.role !== "owner" && m.role !== "admin" && !granted.has(m.user_id),
+                );
+                return (
+                  <div className="row" style={{ marginTop: "var(--s-3)", gap: "var(--s-2)", flexWrap: "wrap" }}>
+                    <span className="small">{t("team.addFromTeam")}</span>
+                    {addable.length > 0 ? (
+                      <>
+                        <select
+                          style={{ width: "auto" }}
+                          value={adding}
+                          onChange={(e) => setAdding(e.target.value)}
+                        >
+                          <option value="">{t("team.pickMember")}</option>
+                          {addable.map((m) => (
+                            <option key={m.user_id} value={m.user_id}>
+                              {m.email}
+                            </option>
+                          ))}
+                        </select>
+                        {roles.length > 0 && (
+                          <select
+                            style={{ width: "auto" }}
+                            value={addingRole}
+                            aria-label={t("ar.inRow")}
+                            onChange={(e) => setAddingRole(e.target.value)}
+                          >
+                            <option value="">{t("ar.default")}</option>
+                            {roles.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          className="primary"
+                          disabled={busy || !adding}
+                          onClick={() =>
+                            run(async () => {
+                              await api.grantAccess(project, adding, MEMBER_PERMS, undefined, addingRole || null);
+                              setAdding("");
+                            })
+                          }
+                        >
+                          {t("team.add")}
+                        </button>
+                      </>
+                    ) : (
+                      <span className="muted small">{t("team.nobodyToAdd")}</span>
+                    )}
+                  </div>
+                );
+              })()}
+            </>
+          )}
+        </>
       )}
 
-      <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>
-        {t("team.thisAccount")}
-      </h2>
-      <button className="ghost" onClick={onSignOut}>
-        {t("app.signOut")}
-      </button>
-      <p className="hint" style={{ maxWidth: 620, marginTop: "var(--s-3)" }}>
+      {tab === "roles" && (
+        <>
+          <h2 className="sectionTitle">{t("team.teamRoles")}</h2>
+          <p className="hint small" style={{ marginTop: 0, maxWidth: 720 }}>{t("team.teamRolesHint")}</p>
+          <div className="roleCards">
+            {(["owner", "admin", "manager", "member"] as const).map((r) => (
+              <div key={r} className="roleCard">
+                <div className="name">{t(roleKey(r))}</div>
+                {/* The sentence without its "Owner:" lead: the card's title says it. */}
+                <div className="hint small">{capitalise(t(roleWhat(r)).replace(/^[^:]+:\s*/, ""))}</div>
+              </div>
+            ))}
+          </div>
+          {isAdmin && (
+            <AccessRoles
+              roles={roles}
+              allPerms={ALL_PERMS}
+              onChanged={async () => {
+                await load();
+                await loadGrants();
+              }}
+            />
+          )}
+        </>
+      )}
+
+      {tab === "sites" && isAdmin && <TeamDomainLists canEdit />}
+
+      {tab === "security" && isAdmin && (
+        <>
+          <Security isOwner={myRole === "owner"} />
+          <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>{t("team.rotate")}</h2>
+      <p className="hint" style={{ maxWidth: 620, marginTop: 0 }}>
         {t("team.rotateHint")}
       </p>
       <button
@@ -917,49 +1072,11 @@ export function Users({
       >
         {t("team.rotate")}
       </button>
-
-      {team.invited.length > 0 && (
-        <>
-          <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>
-            {t("team.pending")}
-          </h2>
-          <table className="grid">
-            <tbody>
-              {team.invited.map((i) => (
-                <tr key={i.email}>
-                  <td>{i.email}</td>
-                  <td className="muted">{t(roleKey(i.role))}</td>
-                  <td className="muted small">
-                    {t("team.expires", { when: new Date(i.expires_at).toLocaleString() })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </>
       )}
 
-      {/* Who did what.
-          Here rather than as a fifth entry in the sidebar, and that is
-          deliberate: the sidebar's own comment says the same four appear
-          everywhere so that an operator does not have to relearn the layout
-          the day their team grows. Audit does not exist at all in local mode —
-          there is nobody else to account for — so a tab that appeared and
-          disappeared would be exactly the rearrangement that argument is
-          against.
-
-          Shown to owners and admins only. The server refuses everyone else,
-          and offering a section that answers with a permission error is worse
-          than not offering it. */}
-      {(team.members.find((m) => m.is_you)?.role === "owner" ||
-        team.members.find((m) => m.is_you)?.role === "admin") && (
-        <>
-          <TeamDomainLists canEdit />
-          <Security isOwner={team.members.find((m) => m.is_you)?.role === "owner"} />
-          <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>{t("team.audit")}</h2>
-          <Audit />
-        </>
-      )}
+      {tab === "audit" && isAdmin && <Audit />}
+      </div>
     </div>
   );
 }
@@ -985,6 +1102,10 @@ function roleKey(role: string): "role.owner" | "role.admin" | "role.manager" | "
     default:
       return "role.member";
   }
+}
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** What a role means, in the words of the server's checks: api.rs

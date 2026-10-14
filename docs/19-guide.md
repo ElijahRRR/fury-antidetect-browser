@@ -117,7 +117,7 @@ The owner or an admin runs the team from **Users**.
 
 ### Inviting someone
 
-1. **Users → Invite someone**: email and role, then **Create invitation**.
+1. **Users → Team → Invite**: email and role, then **Create invitation**.
 2. A code appears. It is shown once, lasts 48 hours and works for one sign-up.
    Pass it on any way you like.
 3. They install Fury and press **I have an invitation** on the first screen
@@ -151,13 +151,13 @@ new invitation.
 ### Project access
 
 A project is a folder of profiles and the unit of access: whoever has the
-project has every profile in it. In **Users** pick the project, **Add from the
+project has every profile in it. In **Users → Project access** pick the project, **Add from the
 team**, tick the rights and **Grant access**. **Revoke** ends it at once.
 
 ### Project roles
 
 When the same boxes have to be ticked for many people, make a role:
-**Users → Project roles → New role…**, a name and the rights. A role is picked
+**Users → Roles → New role…**, a name and the rights. A role is picked
 in the **Role:** field beside a person in a project, in **Add from the team**,
 in the **Let them in** dialog, and when creating the invitation.
 
@@ -195,7 +195,7 @@ somebody left it open and went home.
 
 ### Someone leaves
 
-**Users → Remove**. Their access ends at once and the team key is replaced, so
+**Users → Team → Remove**. Their access ends at once and the team key is replaced, so
 nothing new opens with their old copy. If a laptop with access is lost, use
 **Replace the organisation key**.
 

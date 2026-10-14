@@ -2,6 +2,7 @@
 // Copyright 2026 Bogdan Shapovalov and the Fury authors
 
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "../i18n";
 import { api } from "../api";
 
 type Entry = Awaited<ReturnType<typeof api.audit>>[number];
@@ -21,6 +22,7 @@ type Entry = Awaited<ReturnType<typeof api.audit>>[number];
  *  Paged by id rather than by page number. Rows arrive while somebody is
  *  reading, and OFFSET would show them one twice or skip it. */
 export function Audit() {
+  const { t } = useI18n();
   const [rows, setRows] = useState<Entry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,16 +67,16 @@ export function Audit() {
   const filters = (
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
       <select value={action} onChange={(e) => setAction(e.target.value)} style={{ minWidth: 150 }}>
-        <option value="">all actions</option>
-        <option value="login.">sign-ins</option>
-        <option value="profile.">profiles</option>
-        <option value="proxy.">proxies</option>
-        <option value="project.">projects</option>
-        <option value="org.">organisation</option>
-        <option value="session.">sessions</option>
-        <option value="user.">users</option>
+        <option value="">{t("aud.all")}</option>
+        <option value="login.">{t("aud.logins")}</option>
+        <option value="profile.">{t("aud.profiles")}</option>
+        <option value="proxy.">{t("aud.proxies")}</option>
+        <option value="project.">{t("aud.projects")}</option>
+        <option value="org.">{t("aud.org")}</option>
+        <option value="session.">{t("aud.sessions")}</option>
+        <option value="user.">{t("aud.users")}</option>
       </select>
-      <input placeholder="who (email)" value={actor} onChange={(e) => setActor(e.target.value)} style={{ width: 200 }} />
+      <input placeholder={t("aud.who")} value={actor} onChange={(e) => setActor(e.target.value)} style={{ width: 200 }} />
       <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 150 }} />
       <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} style={{ width: 150 }} />
     </div>
@@ -92,11 +94,8 @@ export function Audit() {
     return (
       <div className="empty pad">
         {filters}
-        <p>Nothing has been recorded yet.</p>
-        <p className="muted">
-          Actions are written as they happen — invitations, grants, launches,
-          deletions. A fresh organisation has none.
-        </p>
+        <p>{t("aud.empty")}</p>
+        <p className="muted">{t("aud.emptyHint")}</p>
       </div>
     );
   }
@@ -107,10 +106,10 @@ export function Audit() {
       <table className="grid">
         <thead>
           <tr>
-            <th>When</th>
-            <th>Who</th>
-            <th>What</th>
-            <th>Detail</th>
+            <th>{t("aud.when")}</th>
+            <th>{t("aud.whoCol")}</th>
+            <th>{t("aud.what")}</th>
+            <th>{t("aud.detail")}</th>
           </tr>
         </thead>
         <tbody>
@@ -140,7 +139,7 @@ export function Audit() {
           disabled={busy}
           onClick={() => void load(rows[rows.length - 1]?.id)}
         >
-          {busy ? "Loading…" : "Load older"}
+          {busy ? t("aud.loading") : t("aud.older")}
         </button>
       )}
     </div>
