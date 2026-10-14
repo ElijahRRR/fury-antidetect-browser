@@ -6,6 +6,7 @@ import { api, type DomainList, type KeptPersona, type Shell } from "../api";
 import { SecondFactor } from "./SecondFactor";
 import { languages, useI18n, type Language } from "../i18n";
 import { type Theme, themes, useTheme } from "../theme";
+import { Select } from "./Select";
 
 const TABS = ["general", "team", "data", "about"] as const;
 type Tab = (typeof TABS)[number];
@@ -571,14 +572,14 @@ function DomainLists() {
       <div className="field">
         <label htmlFor="dl-pick">{t("set.listName")}</label>
         <div>
-          <select id="dl-pick" value={isNew ? "" : name} onChange={(e) => void pick(e.target.value)}>
+          <Select id="dl-pick" value={isNew ? "" : name} onChange={(e) => void pick(e.target.value)}>
             <option value="">{t("set.listNew")}</option>
             {lists.map((l) => (
               <option key={l.name} value={l.name}>
                 {l.name} — {l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
               </option>
             ))}
-          </select>
+          </Select>
           {isNew && (
             <>
               <input

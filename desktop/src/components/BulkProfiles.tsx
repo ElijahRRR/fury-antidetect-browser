@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { api, type LocalProxy, type Profile, type ProfileTemplate } from "../api";
 import { useI18n } from "../i18n";
 import { SUGGESTED } from "../status";
+import { Select } from "./Select";
+import { SuggestInput } from "./SuggestInput";
 
 // `created` is only ever counted. Locally the agent returns ids; on a team
 // server each entry is whatever the create endpoint answered, and pinning that
@@ -144,7 +146,7 @@ export function BulkProfiles({
                   <label htmlFor="bp-template">{t("bp.template")}</label>
                   <div>
                     <div className="row">
-                      <select
+                      <Select
                         id="bp-template"
                         value={templateName}
                         onChange={(e) => {
@@ -157,7 +159,7 @@ export function BulkProfiles({
                         {templates.map((x) => (
                           <option key={x.name} value={x.name}>{x.name}</option>
                         ))}
-                      </select>
+                      </Select>
                       {templateName && templates.some((x) => x.name === templateName) && (
                         <button
                           className="ghost danger"
@@ -232,7 +234,7 @@ export function BulkProfiles({
                   <div className="field">
                     <label htmlFor="bp-proxy">{t("bp.proxy")}</label>
                     <div>
-                      <select
+                      <Select
                         id="bp-proxy"
                         value={proxyId}
                         onChange={(e) => setProxyId(e.target.value)}
@@ -243,7 +245,7 @@ export function BulkProfiles({
                             {p.name}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       <p className="hint">{t("bp.proxyHint")}</p>
                     </div>
                   </div>
@@ -271,10 +273,13 @@ export function BulkProfiles({
                       <div className="field">
                         <label htmlFor="bp-status">{t("pd.status")}</label>
                         <div>
-                          <input id="bp-status" list="bp-status-options" value={status} placeholder={t("pd.statusPlaceholder")} onChange={(e) => setStatus(e.target.value)} />
-                          <datalist id="bp-status-options">
-                            {SUGGESTED.map((x) => <option key={x} value={x}>{t(`status.${x}`)}</option>)}
-                          </datalist>
+                          <SuggestInput
+                            id="bp-status"
+                            value={status}
+                            placeholder={t("pd.statusPlaceholder")}
+                            onChange={setStatus}
+                            suggestions={SUGGESTED.map((x) => ({ value: x, label: t(`status.${x}`) }))}
+                          />
                         </div>
                       </div>
                       <div className="field">

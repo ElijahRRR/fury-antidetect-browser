@@ -11,6 +11,7 @@ import { Security } from "./Security";
 import { TeamDomainLists } from "./TeamDomainLists";
 import type { OrgDomainList } from "../api";
 import { useAsk } from "./Ask";
+import { Select } from "./Select";
 
 type Members = Awaited<ReturnType<typeof api.orgMembers>>;
 type Grants = Awaited<ReturnType<typeof api.grants>>;
@@ -373,7 +374,7 @@ export function Users({
               {roles.length > 0 && admitting.member.role !== "admin" && admitting.member.role !== "owner" && (
                 <label className="row" style={{ gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
                   <span className="small">{t("ar.withRights")}</span>
-                  <select
+                  <Select
                     style={{ width: "auto" }}
                     value={admitting.accessRole}
                     onChange={(e) => setAdmitting({ ...admitting, accessRole: e.target.value })}
@@ -384,7 +385,7 @@ export function Users({
                         {r.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               )}
             </div>
@@ -485,7 +486,7 @@ export function Users({
                     </label>
                     <label>
                       <span>{t("team.role")}</span>
-                      <select value={role} onChange={(e) => setRole(e.target.value)}>
+                      <Select value={role} onChange={(e) => setRole(e.target.value)}>
                         {/* An admin cannot invite another admin (create_invitation
                             in api.rs), so the option is not offered to them. */}
                         {(myRole === "owner" ? ROLES : ROLES.filter((r) => r !== "admin")).map((r) => (
@@ -493,32 +494,32 @@ export function Users({
                             {t(roleKey(r))}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </label>
                     {teamProjects.length > 0 && role !== "admin" && (
                       <label>
                         <span>{t("team.inviteProject")}</span>
-                        <select value={inviteProject} onChange={(e) => setInviteProject(e.target.value)}>
+                        <Select value={inviteProject} onChange={(e) => setInviteProject(e.target.value)}>
                           <option value="">{t("team.inviteNoProject")}</option>
                           {teamProjects.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </label>
                     )}
                     {roles.length > 0 && inviteProject && role !== "admin" && (
                       <label>
                         <span>{t("team.inviteRights")}</span>
-                        <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                        <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
                           <option value="">{t("ar.default")}</option>
                           {roles.map((r) => (
                             <option key={r.id} value={r.id}>
                               {r.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </label>
                     )}
                   </div>
@@ -688,7 +689,7 @@ export function Users({
                         (api.rs, set_member_role): never the owner, never yourself,
                         and an admin handles managers and members only. */}
                     {canChangeRole(myRole, m) ? (
-                      <select
+                      <Select
                         style={{ width: "auto" }}
                         value={m.role}
                         disabled={busy}
@@ -711,7 +712,7 @@ export function Users({
                             {t(roleKey(r))}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     ) : (
                       <span title={t(roleWhat(m.role))}>{t(roleKey(m.role))}</span>
                     )}
@@ -806,13 +807,13 @@ export function Users({
           <div className="toolbarRow">
             <span className="small">{t("team.projectPick")}</span>
             {teamProjects.length > 0 && (
-              <select style={{ width: "auto" }} value={project} onChange={(e) => setProject(e.target.value)}>
+              <Select style={{ width: "auto" }} value={project} onChange={(e) => setProject(e.target.value)}>
                 {teamProjects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
           </div>
           <p className="hint small" style={{ marginTop: 0 }}>{t("team.accessHint")}</p>
@@ -862,7 +863,7 @@ export function Users({
                                 {roles.length > 0 && (
                                   <div className="row" style={{ gap: "var(--s-2)", marginBottom: "var(--s-2)", flexWrap: "wrap" }}>
                                     <span className="small">{t("ar.inRow")}</span>
-                                    <select
+                                    <Select
                                       style={{ width: "auto" }}
                                       value={linked?.id ?? ""}
                                       disabled={busy}
@@ -881,7 +882,7 @@ export function Users({
                                           {r.name}
                                         </option>
                                       ))}
-                                    </select>
+                                    </Select>
                                     {linked && <span className="muted small">{t("ar.linkedHint")}</span>}
                                   </div>
                                 )}
@@ -971,7 +972,7 @@ export function Users({
                     <span className="small">{t("team.addFromTeam")}</span>
                     {addable.length > 0 ? (
                       <>
-                        <select
+                        <Select
                           style={{ width: "auto" }}
                           value={adding}
                           onChange={(e) => setAdding(e.target.value)}
@@ -982,9 +983,9 @@ export function Users({
                               {m.email}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                         {roles.length > 0 && (
-                          <select
+                          <Select
                             style={{ width: "auto" }}
                             value={addingRole}
                             aria-label={t("ar.inRow")}
@@ -996,7 +997,7 @@ export function Users({
                                 {r.name}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         )}
                         <button
                           className="primary"

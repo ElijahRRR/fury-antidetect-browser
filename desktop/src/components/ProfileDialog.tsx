@@ -7,6 +7,8 @@ import { spreadPastedProxy } from "../proxyLine";
 import { SUGGESTED } from "../status";
 import { api, type DomainList, type LocalProxy, type MachineOverrides, type Persona, type Preview, type Profile } from "../api";
 import { Logins } from "./Logins";
+import { Select } from "./Select";
+import { SuggestInput } from "./SuggestInput";
 
 // "Logins" only exists for a profile that has been saved: a login belongs to a
 // profile id, and there is no id until the first save. Showing an empty tab on
@@ -468,18 +470,13 @@ export function ProfileDialog({
                 <div className="field">
                   <label htmlFor="p-status">{t("pd.status")}</label>
                   <div>
-                    <input
+                    <SuggestInput
                       id="p-status"
-                      list="p-status-options"
                       value={status}
                       placeholder={t("pd.statusPlaceholder")}
-                      onChange={(e) => setStatus(e.target.value)}
+                      onChange={setStatus}
+                      suggestions={SUGGESTED.map((s) => ({ value: s, label: t(`status.${s}`) }))}
                     />
-                    <datalist id="p-status-options">
-                      {SUGGESTED.map((s) => (
-                        <option key={s} value={s}>{t(`status.${s}`)}</option>
-                      ))}
-                    </datalist>
                     <p className="hint">{t("pd.statusHint")}</p>
                   </div>
                 </div>
@@ -585,7 +582,7 @@ export function ProfileDialog({
                   <div className="field">
                     <label htmlFor="p-proxy">{t("px.saved")}</label>
                     <div>
-                      <select
+                      <Select
                         id="p-proxy"
                         value={proxyId}
                         onChange={(e) => setProxyId(e.target.value)}
@@ -596,7 +593,7 @@ export function ProfileDialog({
                             {p.name} · {p.kind}://{p.host}:{p.port}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       {!proxyId && !needsProxy && noProxyChoice}
                       {!proxyId && needsProxy && <p className="hint">{t("pd.proxyRequired")}</p>}
                     </div>
@@ -866,7 +863,7 @@ export function ProfileDialog({
                       placeholder={t("pd.followExit")}
                       onChange={(e) => setLanguages(e.target.value)}
                     />
-                    <select
+                    <Select
                       value=""
                       style={{ marginTop: "var(--s-2)" }}
                       onChange={(e) => e.target.value && setLanguages(e.target.value)}
@@ -875,14 +872,14 @@ export function ProfileDialog({
                       {LANGUAGE_SETS.map((l) => (
                         <option key={l} value={l}>{languageName(l.split(",")[0], lang)} · {l}</option>
                       ))}
-                    </select>
+                    </Select>
                     <p className="hint">{t("pd.languagesHint")}</p>
                   </div>
                 </div>
                 <div className="field">
                   <label htmlFor="p-ui">{t("pd.uiLocale")}</label>
                   <div>
-                    <select
+                    <Select
                       id="p-ui"
                       value={overrides.ui_locale ?? ""}
                       onChange={(e) => setOv({ ui_locale: e.target.value || undefined })}
@@ -893,23 +890,20 @@ export function ProfileDialog({
                       {(preview?.options?.ui_locales ?? []).map((l) => (
                         <option key={l} value={l}>{languageName(l, lang)}</option>
                       ))}
-                    </select>
+                    </Select>
                     <p className="hint">{t("pd.uiLocaleHint")}</p>
                   </div>
                 </div>
                 <div className="field">
                   <label htmlFor="p-tz">{t("pd.timezone")}</label>
                   <div>
-                    <input
+                    <SuggestInput
                       id="p-tz"
-                      list="p-tz-list"
                       value={timezone}
                       placeholder={t("pd.followExit")}
-                      onChange={(e) => setTimezone(e.target.value)}
+                      onChange={setTimezone}
+                      suggestions={TIME_ZONES.map((z) => ({ value: z }))}
                     />
-                    <datalist id="p-tz-list">
-                      {TIME_ZONES.map((z) => <option key={z} value={z} />)}
-                    </datalist>
                     <p className="hint">{t("pd.timezoneHint")}</p>
                   </div>
                 </div>
@@ -930,7 +924,7 @@ export function ProfileDialog({
                   <label htmlFor="p-screen">{t("pd.screen")}</label>
                   <div>
                     <div className="row">
-                      <select
+                      <Select
                         id="p-screen"
                         value={overrides.screen ? `${overrides.screen.width}x${overrides.screen.height}` : ""}
                         onChange={(e) => {
@@ -952,8 +946,8 @@ export function ProfileDialog({
                         {(preview?.options?.screens ?? []).map(([w, h]) => (
                           <option key={`${w}x${h}`} value={`${w}x${h}`}>{w}×{h}</option>
                         ))}
-                      </select>
-                      <select
+                      </Select>
+                      <Select
                         aria-label={t("pd.dpr")}
                         title={t("pd.dpr")}
                         value={overrides.screen?.device_pixel_ratio ?? preview?.base?.device_pixel_ratio ?? 1}
@@ -968,7 +962,7 @@ export function ProfileDialog({
                         {(preview?.options?.device_pixel_ratios ?? [1]).map((d) => (
                           <option key={d} value={d}>{Math.round(d * 100)}%</option>
                         ))}
-                      </select>
+                      </Select>
                     </div>
                     <p className="hint">{t("pd.screenHint")}</p>
                   </div>
@@ -976,34 +970,34 @@ export function ProfileDialog({
                 <div className="field">
                   <label htmlFor="p-cores">{t("pd.cores")}</label>
                   <div>
-                    <select
+                    <Select
                       id="p-cores"
                       value={overrides.cores ?? ""}
                       onChange={(e) => setOv({ cores: e.target.value ? Number(e.target.value) : undefined })}
                     >
                       <option value="">{t("pd.asMachine", { v: preview?.base?.cores ?? "…" })}</option>
                       {(preview?.options?.cores ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    </Select>
                   </div>
                 </div>
                 <div className="field">
                   <label htmlFor="p-mem">{t("pd.memory")}</label>
                   <div>
-                    <select
+                    <Select
                       id="p-mem"
                       value={overrides.memory_gb ?? ""}
                       onChange={(e) => setOv({ memory_gb: e.target.value ? Number(e.target.value) : undefined })}
                     >
                       <option value="">{t("pd.asMachine", { v: preview?.base?.memory_gb ?? "…" })}</option>
                       {(preview?.options?.memory_gb ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
+                    </Select>
                     <p className="hint">{t("pd.memoryHint")}</p>
                   </div>
                 </div>
                 <div className="field">
                   <label htmlFor="p-gpu">{t("pd.gpu")}</label>
                   <div>
-                    <select
+                    <Select
                       id="p-gpu"
                       value={overrides.gpu ?? ""}
                       onChange={(e) => setOv({ gpu: e.target.value || undefined })}
@@ -1012,7 +1006,7 @@ export function ProfileDialog({
                       {(preview?.options?.gpus ?? []).map((g) => (
                         <option key={g.id} value={g.id}>{gpuName(g.renderer)}</option>
                       ))}
-                    </select>
+                    </Select>
                     <p className="hint">{t("pd.gpuHint")}</p>
                   </div>
                 </div>
@@ -1042,7 +1036,7 @@ export function ProfileDialog({
                 <div className="field">
                   <label htmlFor="pd-canvas">{t("pd.canvasMode")}</label>
                   <div>
-                    <select
+                    <Select
                       id="pd-canvas"
                       value={overrides.canvas ?? "noise"}
                       disabled={machineLocked}
@@ -1052,7 +1046,7 @@ export function ProfileDialog({
                     >
                       <option value="noise">{t("pd.canvasNoise")}</option>
                       <option value="real">{t("pd.canvasReal")}</option>
-                    </select>
+                    </Select>
                     <div className="muted small">
                       {machineLocked ? t("pd.machineLockedTeam") : t("pd.canvasHint")}
                     </div>

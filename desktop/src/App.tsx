@@ -31,6 +31,7 @@ import { Icon, IconButton } from "./components/Icon";
 import { useTheme } from "./theme";
 import { exitSharing } from "./consistency";
 import { isSuggested } from "./status";
+import { Select } from "./components/Select";
 
 /** What the browser build the agent asks for changes, for the bar that offers
  *  it. One sentence for every build told a Mac being offered 0.3.8 about a
@@ -1074,7 +1075,7 @@ export function App() {
               onChange={(e) => setQuery(e.target.value)}
             />
             {tags.length > 0 && (
-              <select style={{ width: "auto" }} value={tag} onChange={(e) => setTag(e.target.value)}>
+              <Select style={{ width: "auto" }} value={tag} onChange={(e) => setTag(e.target.value)}>
                 <option value="">{t("bar.allTags")}</option>
                 <option value={"\u0000none"}>{t("bar.untagged")}</option>
                 {tags.map((x) => (
@@ -1082,10 +1083,10 @@ export function App() {
                     {x}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
             {stages.length > 0 && (
-              <select style={{ width: "auto" }} value={stage} onChange={(e) => setStage(e.target.value)}>
+              <Select style={{ width: "auto" }} value={stage} onChange={(e) => setStage(e.target.value)}>
                 <option value="">{t("bar.allStages")}</option>
                 <option value={"\u0000none"}>{t("bar.noStage")}</option>
                 {stages.map((x) => (
@@ -1093,7 +1094,7 @@ export function App() {
                     {isSuggested(x) ? t(`status.${x}` as never) : x} ({profiles.filter((p) => (p.status ?? "").trim().toLowerCase() === x).length})
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
             <label className="row" style={{ gap: 6, whiteSpace: "nowrap" }}>
               <input
@@ -1256,7 +1257,7 @@ export function App() {
                       : null;
                   const filable = side ? projects.filter((p) => p.origin === side) : [];
                   return filable.length > 0 && (
-                  <select
+                  <Select
                     style={{ width: "auto" }}
                     value=""
                     disabled={busy}
@@ -1295,7 +1296,7 @@ export function App() {
                     {side === "local" && (
                       <option value={"\u0000none"}>{t("bar.moveOut")}</option>
                     )}
-                  </select>
+                  </Select>
                   );
                 })()}
                 {/* Proxy for the whole selection (5.7). Offered when every
@@ -1333,7 +1334,7 @@ export function App() {
                     setNotice({ text: failed > 0 ? t("bar.proxySetFailed", { n: pairs.length - failed, f: failed }) : t("bar.proxySet", { n: pairs.length }), forProfile: null });
                   };
                   return (
-                    <select
+                    <Select
                       style={{ width: "auto" }}
                       value=""
                       disabled={busy}
@@ -1360,7 +1361,7 @@ export function App() {
                       ))}
                       {/* A team profile must have a proxy: the server refuses one without. */}
                       {local && <option value={"\u0000none"}>{t("bar.proxyNone")}</option>}
-                    </select>
+                    </Select>
                   );
                 })()}
                 {/* One profile, not many. Copying acts on a single source and

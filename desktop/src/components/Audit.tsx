@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import { api } from "../api";
+import { Select } from "./Select";
 
 type Entry = Awaited<ReturnType<typeof api.audit>>[number];
 
@@ -66,7 +67,7 @@ export function Audit() {
 
   const filters = (
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
-      <select value={action} onChange={(e) => setAction(e.target.value)} style={{ minWidth: 150 }}>
+      <Select value={action} onChange={(e) => setAction(e.target.value)} style={{ minWidth: 150 }}>
         <option value="">{t("aud.all")}</option>
         <option value="login.">{t("aud.logins")}</option>
         <option value="profile.">{t("aud.profiles")}</option>
@@ -75,7 +76,7 @@ export function Audit() {
         <option value="org.">{t("aud.org")}</option>
         <option value="session.">{t("aud.sessions")}</option>
         <option value="user.">{t("aud.users")}</option>
-      </select>
+      </Select>
       <input placeholder={t("aud.who")} value={actor} onChange={(e) => setActor(e.target.value)} style={{ width: 200 }} />
       <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 150 }} />
       <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} style={{ width: 150 }} />

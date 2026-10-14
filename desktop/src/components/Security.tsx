@@ -6,6 +6,7 @@ import { api, type LoginEvent, type SecurityPolicy, type SessionRow } from "../a
 import { useI18n } from "../i18n";
 import { withStepUp } from "../stepUp";
 import { useAsk } from "./Ask";
+import { Select } from "./Select";
 
 /** The organisation's sign-in policy, its login journal, and everyone's
  *  sessions. Owners and admins; the policy itself is the owner's to change.
@@ -59,7 +60,7 @@ export function Security({ isOwner }: { isOwner: boolean }) {
       <div className="field">
         <label>{t("sec.secondFactor")}</label>
         <div>
-          <select
+          <Select
             value={policy.second_factor}
             disabled={!isOwner}
             onChange={(e) => setPolicy({ ...policy, second_factor: e.target.value as SecurityPolicy["second_factor"] })}
@@ -67,7 +68,7 @@ export function Security({ isOwner }: { isOwner: boolean }) {
             <option value="off">{t("sec.sfOff")}</option>
             <option value="new_device">{t("sec.sfNewDevice")}</option>
             <option value="always">{t("sec.sfAlways")}</option>
-          </select>
+          </Select>
           <p className="hint">{t("sec.secondFactorHint")}</p>
           {policy.second_factor !== "off" && notEnrolled.length > 0 && (
             <p className="hint warn">
@@ -209,12 +210,12 @@ export function Security({ isOwner }: { isOwner: boolean }) {
 
       <h2 className="sectionTitle" style={{ marginTop: "var(--s-6)" }}>{t("sec.logins")}</h2>
       <div className="row" style={{ marginBottom: "var(--s-2)" }}>
-        <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+        <Select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
           <option value="">{t("sec.allOutcomes")}</option>
           {["ok", "bad_password", "ip_refused", "totp_required", "totp_failed"].map((o) => (
             <option key={o} value={o}>{t(`sec.outcome.${o}` as never)}</option>
           ))}
-        </select>
+        </Select>
       </div>
       {logins.length === 0 ? (
         <p className="empty pad">{t("sec.noLogins")}</p>

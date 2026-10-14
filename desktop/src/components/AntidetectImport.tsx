@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 import { api, type LocalProxy, type Persona, type Vendor, type VendorProfile } from "../api";
 import { useI18n } from "../i18n";
+import { Select } from "./Select";
 
 /** Profiles and their cookies out of another anti-detect browser, through
  *  its own API (agent/src/import_antidetect/ says what is read and why).
@@ -209,7 +210,7 @@ export function AntidetectImport({
               <div className="field">
                 <label htmlFor="gl-vendor">{t("gl.source")}</label>
                 <div>
-                  <select
+                  <Select
                     id="gl-vendor"
                     value={vendor}
                     onChange={(e) => {
@@ -222,7 +223,7 @@ export function AntidetectImport({
                     {VENDORS.map((v) => (
                       <option key={v.id} value={v.id}>{v.name}</option>
                     ))}
-                  </select>
+                  </Select>
                   <p className="hint small">{t(`gl.how.${vendor}` as never)}</p>
                 </div>
               </div>
