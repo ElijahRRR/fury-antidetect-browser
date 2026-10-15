@@ -1426,7 +1426,9 @@ export function App() {
                     </Select>
                   );
                 })()}
-                {chosen.length >= 1 && local && (
+                {/* A team profile is warmed the way it is opened: under its
+                    lock, so only by someone who may open it. */}
+                {chosen.length >= 1 && chosen.every((p) => p.permissions.includes("launch")) && (
                   <button disabled={busy} title={t("warm.why")} onClick={() => setWarmFor(chosen)}>
                     {t("warm.button", { n: chosen.length })}
                   </button>

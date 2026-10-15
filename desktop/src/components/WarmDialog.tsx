@@ -95,7 +95,7 @@ export function WarmDialog({
               setBusy(true);
               setError(null);
               try {
-                const r = await api.warmStart(profiles.map((p) => p.id), {
+                const r = await api.warmStart(profiles.map((p) => ({ id: p.id, origin: p.origin })), {
                   urls: list,
                   dwell_seconds: [lo, hi],
                   follow_link: follow,

@@ -1589,9 +1589,28 @@ pub async fn launch(
         return Ok(serde_json::json!({ "launched": true, "pid": out.get("pid") }));
     }
 
+    let (grant, out) = take_and_launch(&state, &profile_id, force, false).await?;
+
+    Ok(serde_json::json!({
+        "launched": true,
+        "pid": out.get("pid"),
+        "expires_at": grant.expires_at,
+        "restrictions": grant.restrictions,
+    }))
+}
+
+/// Take a team profile's lock and start its browser on it; the lock is given
+/// back if the browser does not start. `cdp` opens the debugging port, which
+/// warming drives the page through.
+async fn take_and_launch(
+    state: &AppState,
+    profile_id: &str,
+    force: bool,
+    cdp: bool,
+) -> R<(LockGrant, serde_json::Value)> {
     // A profile on a machine a colleague captured: the persona has to be
     // here before the agent looks it up by id.
-    sync_org_personas(&state).await;
+    sync_org_personas(state).await;
 
     let body = serde_json::json!({
         "machine_id": state.machine_id(),
@@ -1611,13 +1630,25 @@ pub async fn launch(
         .locks
         .lock()
         .unwrap()
-        .insert(profile_id.clone(), grant.lock_token.clone());
+        .insert(profile_id.to_string(), grant.lock_token.clone());
 
     // From here a failure has to release the lock. Leaving one behind on a
     // profile that never opened is the thing locks are supposed to prevent,
     // arrived at from the wrong direction — a colleague waiting ninety seconds
     // for a browser that does not exist.
-    let launched = launch_from_spec(&state, &grant).await;
+    //
+    // The agent is handed none of the team's restrictions, so a profile the
+    // team closed to automation is refused here, before a browser starts that
+    // warming could not drive.
+    let denied = cdp && grant.restrictions.get("deny_cdp").and_then(|v| v.as_bool()) == Some(true);
+    let launched = if denied {
+        Err(ApiErr::coded(
+            "err.cdpDenied",
+            "The team has closed automation over the debugging port for this profile, and warming works through it.",
+        ))
+    } else {
+        launch_from_spec(state, &grant, cdp).await
+    };
     if launched.is_err() {
         let _: R<serde_json::Value> = state
             .call(
@@ -1627,20 +1658,14 @@ pub async fn launch(
                 true,
             )
             .await;
-        state.locks.lock().unwrap().remove(&profile_id);
+        state.locks.lock().unwrap().remove(profile_id);
     }
-    let out = launched?;
-
-    Ok(serde_json::json!({
-        "launched": true,
-        "pid": out.get("pid"),
-        "expires_at": grant.expires_at,
-        "restrictions": grant.restrictions,
-    }))
+    Ok((grant, launched?))
 }
 
+
 /// Turn a launch spec into a running browser.
-async fn launch_from_spec(state: &AppState, grant: &LockGrant) -> R<serde_json::Value> {
+async fn launch_from_spec(state: &AppState, grant: &LockGrant, cdp: bool) -> R<serde_json::Value> {
     let spec = &grant.spec;
 
     let org_key = state
@@ -1753,6 +1778,7 @@ async fn launch_from_spec(state: &AppState, grant: &LockGrant) -> R<serde_json::
             "profile_key": hex(&profile_key),
             "cookie_key": hex(&cookie_key),
             "key_generation": spec.key_generation,
+            "cdp": cdp,
         }),
     )
     .await?)
@@ -3786,9 +3812,59 @@ pub async fn mirror_typing(on: bool) -> R<serde_json::Value> {
 
 // ---- warming -----------------------------------------------------------------
 
+#[derive(Deserialize)]
+pub struct WarmTarget {
+    id: String,
+    origin: Option<String>,
+}
+
+/// Warm profiles. A local one the agent opens itself. A team one is opened
+/// here first, the way the Open button opens it -- lock, bundle, keys -- with
+/// the debugging port on; the agent then finds it running and drives it, and
+/// closing it afterwards goes through the agent's stop, which pushes the
+/// bundle and gives the lock back.
 #[tauri::command]
-pub async fn warm_start(profile_ids: Vec<String>, plan: serde_json::Value) -> R<serde_json::Value> {
-    Ok(crate::agent::call("warm.start", serde_json::json!({ "profile_ids": profile_ids, "plan": plan })).await?)
+pub async fn warm_start(
+    state: State<'_, AppState>,
+    profiles: Vec<WarmTarget>,
+    plan: serde_json::Value,
+) -> R<serde_json::Value> {
+    let open_here: Vec<String> = crate::agent::call::<serde_json::Value>("status", serde_json::json!({}))
+        .await
+        .ok()
+        .and_then(|s| s.get("running").cloned())
+        .and_then(|r| serde_json::from_value(r).ok())
+        .unwrap_or_default();
+    let mut ids = Vec::new();
+    let mut names = serde_json::Map::new();
+    let mut refused = Vec::new();
+    for p in profiles {
+        // Open here already: the agent warms it if it has the port, and
+        // refuses it by name if not. Taking the lock again would be refused
+        // as this machine's own.
+        if local_for(&state, p.origin.as_deref()) || open_here.contains(&p.id) {
+            ids.push(p.id);
+            continue;
+        }
+        match take_and_launch(&state, &p.id, false, true).await {
+            Ok((grant, _)) => {
+                // The agent's store has no record of a team profile; without
+                // this its progress line would read as an id.
+                names.insert(p.id.clone(), grant.spec.name.clone().into());
+                ids.push(p.id);
+            }
+            Err(e) => refused.push(serde_json::json!({ "id": p.id, "reason": e.message, "code": e.code })),
+        }
+    }
+    let mut out: serde_json::Value = crate::agent::call(
+        "warm.start",
+        serde_json::json!({ "profile_ids": ids, "plan": plan, "names": names }),
+    )
+    .await?;
+    if let Some(list) = out.get_mut("refused").and_then(|v| v.as_array_mut()) {
+        list.extend(refused);
+    }
+    Ok(out)
 }
 #[tauri::command]
 pub async fn warm_status() -> R<serde_json::Value> {

@@ -1152,8 +1152,10 @@ export const api = {
 
   // ---- warming ------------------------------------------------------------
 
-  warmStart: (profileIds: string[], plan: WarmPlan): Promise<{ started: string[]; refused: Refusal[] }> =>
-    cmd("warm_start", { profileIds, plan }),
+  /** A team profile is opened by the shell first, lock and all, with the
+   *  debugging port; a local one by the agent. */
+  warmStart: (profiles: { id: string; origin: Origin }[], plan: WarmPlan): Promise<{ started: string[]; refused: Refusal[] }> =>
+    cmd("warm_start", { profiles, plan }),
   warmStatus: (): Promise<WarmProgress[]> => cmd<WarmProgress[]>("warm_status"),
   warmStop: (id: string): Promise<unknown> => cmd("warm_stop", { id }),
   warmClear: (): Promise<unknown> => cmd("warm_clear"),

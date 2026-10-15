@@ -1782,7 +1782,12 @@ impl Agent {
                         }
                     }
                     let ws = self.running.lock().await.get(&id).and_then(|r| r.ws_endpoint.clone());
-                    let name = self.store.profiles(None).await?.into_iter().find(|p| p.id == id).map(|p| p.name).unwrap_or_else(|| id.clone());
+                    // A team profile is not in the store; the shell that
+                    // opened it passes its name.
+                    let name = match params.get("names").and_then(|n| n.get(&id)).and_then(|v| v.as_str()) {
+                        Some(n) => n.to_string(),
+                        None => self.store.profiles(None).await?.into_iter().find(|p| p.id == id).map(|p| p.name).unwrap_or_else(|| id.clone()),
+                    };
                     let Some(ws) = ws else {
                         refused.push(json!({ "id": id, "reason": "no debugging port after launch" }));
                         continue;

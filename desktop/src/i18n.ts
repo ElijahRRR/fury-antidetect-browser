@@ -418,6 +418,7 @@ const en = {
   "auth.unlockWhy": "Your session is still valid, but this machine is not holding the key that opens the team's data. Either you asked not to keep it between launches, or nobody has handed it to you yet — in which case a password will not help and an owner has to grant it.",
   "err.notSignedIn": "Not signed in.",
   "err.agentDown": "The local agent is not running, so this machine cannot list personas or open a profile. It is started automatically — if this persists, quit and reopen Fury.",
+  "err.cdpDenied": "the team has closed automation over the debugging port for this profile, and warming works through it.",
   "err.noProxy":
     "This profile has no proxy, so it would go out from this machine's own address. Give it one, or tick \"Let this profile open without a proxy\" on the Proxy tab of its settings (the pencil).",
   "err.closeProfilesFirst": "Close the open profiles first: the browser they run in is the one being replaced.",
@@ -1605,6 +1606,7 @@ const ru: Record<Key, string> = {
   "auth.unlockWhy": "Сессия жива, но на этой машине нет ключа, которым открываются данные команды. Либо вы просили не хранить его между запусками, либо вам его ещё не выдали — тогда пароль не поможет и ключ должен выдать владелец.",
   "err.notSignedIn": "Вы не вошли.",
   "err.agentDown": "Локальный агент не запущен, поэтому эта машина не может показать список машин и открыть профиль. Он поднимается сам — если не проходит, закройте и откройте Fury.",
+  "err.cdpDenied": "команда закрыла для этого профиля автоматизацию через отладочный порт, а прогрев работает через неё.",
   "err.noProxy":
     "У этого профиля нет прокси, поэтому он пошёл бы в сеть с адреса этой машины. Укажите прокси или отметьте «Разрешить этому профилю открываться без прокси» в его настройках: карандаш, вкладка «Прокси».",
   "err.closeProfilesFirst": "Сначала закройте открытые профили: обновляется браузер, в котором они работают.",
