@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core window access for the main window. Nothing else: every server call goes through this app's own #[tauri::command]s, which are not plugin commands and so need no permission here, and no plugin that reaches the filesystem, the shell or the network from JavaScript is installed.",
+  "description": "Core window access for the main window. Nothing else: every server call goes through this app's own #[tauri::command]s, which are not plugin commands and so need no permission here, and no plugin that reaches the filesystem, the shell or the network from JavaScript is installed. Setting the window's theme is the one write: the title bar and the web view's prefers-color-scheme both follow it.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-theme"]
 }
