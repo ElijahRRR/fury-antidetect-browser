@@ -4578,6 +4578,79 @@ pub fn check_bundle_root() -> anyhow::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// A file that is removed when this goes out of scope, unless disarmed.
+///
+/// An upload writes a file before it knows whether the upload will stand, and
+/// every way out after that has to take the file with it. Each early return
+/// used to remove it by hand, and the ones nobody wrote leaked: a 409 because
+/// a colleague uploaded first, a failed query, a failed rename -- and after the
+/// rename, a database error left a finished `<version>.bundle` that no row
+/// names. None of it counted against a quota, and nothing swept it (found
+/// 14.10.2026, reading the handler after a tester asked about his disk). A
+/// handler dropped mid-upload, a client gone or the server shutting down, ran
+/// none of the hand-written removals at all; this runs on drop.
+struct RemoveOnDrop(Option<std::path::PathBuf>);
+
+impl RemoveOnDrop {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self(Some(path))
+    }
+    /// The file has a row naming it now, or it was moved away: keep it.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(error = %e, path = %path.display(), "could not remove an abandoned upload"),
+            }
+        }
+    }
+}
+
+/// The prefix of an upload still being received. See `upload_bundle`.
+const INCOMING: &str = ".incoming-";
+
+/// Removes uploads that stopped being written more than `idle` ago.
+///
+/// What [`RemoveOnDrop`] cannot catch: a server killed outright mid-upload, and
+/// the files the handler leaked before it existed. At startup, so a server
+/// that has been leaking cleans up once it is updated. By the time a file was
+/// last written rather than created: a slow upload of a large profile is
+/// written to the whole time it lasts, so it is never mistaken for a dead one.
+///
+/// Only `.incoming-*` files. A `<version>.bundle` with no row is also dead
+/// weight, but telling that needs the database, and a query here runs with no
+/// identity, under which row-level security shows no rows at all -- every
+/// bundle would look orphaned.
+pub fn sweep_abandoned_uploads(root: &std::path::Path, idle: std::time::Duration) -> usize {
+    let mut removed = 0;
+    let Ok(profiles) = std::fs::read_dir(root) else { return 0 };
+    for dir in profiles.flatten().filter(|d| d.path().is_dir()) {
+        let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+        for f in files.flatten() {
+            if !f.file_name().to_string_lossy().starts_with(INCOMING) {
+                continue;
+            }
+            let stale = f
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age >= idle);
+            if stale && std::fs::remove_file(f.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 /// Upload a new version.
 ///
 /// The version the client based its work on comes in a header, and a mismatch
@@ -4712,7 +4785,8 @@ async fn upload_bundle(
 
     let dir = bundle_root().join(profile_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.into()))?;
-    let staging = dir.join(format!(".incoming-{}", Uuid::now_v7()));
+    let staging = dir.join(format!("{INCOMING}{}", Uuid::now_v7()));
+    let mut staging_guard = RemoveOnDrop::new(staging.clone());
 
     // What this organisation has already stored, so the ceiling is on the org
     // and not only on the single upload. Read once, before the stream, because
@@ -4743,13 +4817,9 @@ async fn upload_bundle(
         let mut file = std::fs::File::create(&staging).map_err(|e| ApiError::Internal(e.into()))?;
         let mut stream = body.into_data_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                let _ = std::fs::remove_file(&staging);
-                ApiError::BadRequest(format!("the upload stopped early: {e}"))
-            })?;
+            let chunk = chunk.map_err(|e| ApiError::BadRequest(format!("the upload stopped early: {e}")))?;
             written += chunk.len();
             if written > limit {
-                let _ = std::fs::remove_file(&staging);
                 return Err(ApiError::BadRequest(format!(
                     "this bundle is over the {} limit for this server",
                     human_bytes(limit as i64)
@@ -4760,7 +4830,6 @@ async fn upload_bundle(
             // and the bandwidth it was meant to protect.
             if let Some(ceiling) = org_ceiling {
                 if org_used + written as i64 > ceiling {
-                    let _ = std::fs::remove_file(&staging);
                     return Err(ApiError::BadRequest(format!(
                         "this organisation may store {} and has {}; the upload was \
                          stopped after {}. Delete a profile, or ask whoever runs the \
@@ -4773,24 +4842,26 @@ async fn upload_bundle(
             }
             hasher.update(&chunk);
             use std::io::Write;
-            if let Err(e) = file.write_all(&chunk) {
-                let _ = std::fs::remove_file(&staging);
-                return Err(ApiError::Internal(e.into()));
-            }
+            file.write_all(&chunk).map_err(|e| ApiError::Internal(e.into()))?;
         }
     }
 
     let actual: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
     if actual != sha256 {
-        let _ = std::fs::remove_file(&staging);
         return Err(ApiError::BadRequest(
             "the body does not match the digest it was sent with".into(),
         ));
     }
 
-    let current: i32 = sqlx::query_scalar("SELECT current_version FROM profiles WHERE id = $1")
+    let mut tx = db.begin().await?;
+
+    // FOR UPDATE, inside the transaction that records the version: two uploads
+    // that both read version 5 would otherwise both move their file to
+    // 6.bundle, the second over the first, and one row would end up naming the
+    // other's bytes. The second now waits here, then reads 6 and gets the 409.
+    let current: i32 = sqlx::query_scalar("SELECT current_version FROM profiles WHERE id = $1 FOR UPDATE")
         .bind(profile_id)
-        .fetch_optional(db.as_mut())
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -4804,8 +4875,11 @@ async fn upload_bundle(
     let key = format!("{profile_id}/{version}.bundle");
     std::fs::rename(&staging, bundle_root().join(&key))
         .map_err(|e| ApiError::Internal(e.into()))?;
-
-    let mut tx = db.begin().await?;
+    staging_guard.disarm();
+    // Declared after `tx`, so on an error it is dropped first: the file goes
+    // while the row lock is still held, before a waiting upload can move its
+    // own file to the same name.
+    let mut bundle_guard = RemoveOnDrop::new(bundle_root().join(&key));
 
     // A bundle sealed under a profile key from before a rotation opens for
     // nobody who holds the current key. That is a browser left open across a
@@ -4827,8 +4901,6 @@ async fn upload_bundle(
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(current) = current.filter(|c| sealed_under < *c) {
-            drop(tx);
-            let _ = std::fs::remove_file(bundle_root().join(&key));
             return Err(ApiError::Conflict(format!(
                 "this browser was opened with organisation key generation {sealed_under}, and the \
                  key has been replaced since (now {current}). What it saved would open for nobody. \
@@ -4879,6 +4951,7 @@ async fn upload_bundle(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    bundle_guard.disarm();
 
     // Now that the rows are gone for good.
     let mut freed = 0usize;
@@ -5100,5 +5173,57 @@ mod tests {
         assert!(mask_host("localhost").starts_with("***"));
         assert!(mask_host("ab.example.com").ends_with(".example.com"));
         assert!(!mask_host("ab.example.com").starts_with("ab***"));
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("fury-server-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn an_upload_that_does_not_stand_takes_its_file_with_it() {
+        let d = scratch("guard");
+        let (dropped, kept) = (d.join(".incoming-a"), d.join("6.bundle"));
+        std::fs::write(&dropped, "x").unwrap();
+        std::fs::write(&kept, "x").unwrap();
+        {
+            // An early return, as on a 409: nothing disarms it.
+            let _g = RemoveOnDrop::new(dropped.clone());
+        }
+        {
+            let mut g = RemoveOnDrop::new(kept.clone());
+            g.disarm();
+        }
+        assert!(!dropped.exists(), "the refused upload stayed on disk");
+        assert!(kept.exists(), "a committed bundle was removed");
+        // A file already moved away is not an error.
+        drop(RemoveOnDrop::new(d.join("never-existed")));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_startup_sweep_takes_only_dead_uploads() {
+        let root = scratch("sweep");
+        let p = root.join("0194b3c0-0000-7000-8000-000000000001");
+        std::fs::create_dir_all(&p).unwrap();
+        for f in [".incoming-old", ".incoming-live", "3.bundle"] {
+            std::fs::write(p.join(f), "x").unwrap();
+        }
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        for f in [".incoming-old", "3.bundle"] {
+            std::fs::File::options().write(true).open(p.join(f)).unwrap().set_modified(hour_ago).unwrap();
+        }
+        // A stray file at the top level is not a profile directory.
+        std::fs::write(root.join(".incoming-top"), "x").unwrap();
+
+        assert_eq!(sweep_abandoned_uploads(&root, std::time::Duration::from_secs(3600)), 1);
+        assert!(!p.join(".incoming-old").exists());
+        assert!(p.join(".incoming-live").exists(), "an upload still being written was removed");
+        assert!(p.join("3.bundle").exists(), "a bundle is never the sweep's to judge");
+        assert!(root.join(".incoming-top").exists());
+        assert_eq!(sweep_abandoned_uploads(&root.join("missing"), std::time::Duration::ZERO), 0);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

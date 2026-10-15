@@ -138,6 +138,12 @@ async fn main() -> anyhow::Result<()> {
     // Before the socket, not at the first upload.
     let bundles = api::check_bundle_root()?;
     tracing::info!(dir = %bundles.display(), "bundles");
+    // An hour unwritten: no live upload goes that long between chunks, and a
+    // second server on the same directory would still be safe.
+    let swept = api::sweep_abandoned_uploads(&bundles, std::time::Duration::from_secs(3600));
+    if swept > 0 {
+        tracing::info!(swept, "removed uploads abandoned before this start");
+    }
 
     let db = connect().await?;
     sqlx::migrate!("./migrations").run(&db).await?;

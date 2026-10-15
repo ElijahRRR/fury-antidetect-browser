@@ -1007,3 +1007,20 @@ db_test!(an_upload_reads_the_generation_it_is_checked_against, c, {
     .expect("generation");
     assert_eq!(g, Some(1));
 });
+
+db_test!(an_upload_can_lock_the_profile_it_versions, c, {
+    make_shared_fixture(&mut c).await;
+    share_with_b(&mut c, "NULL", "'\\x01'").await;
+    // upload_bundle reads current_version FOR UPDATE, which RLS filters by the
+    // UPDATE side of the policy. Both a member of the owning organisation and
+    // the grantee of a share must still find the row, or their uploads 404.
+    for user in [USER_A, USER_B] {
+        bind(&mut c, user).await;
+        let v: Option<i32> = sqlx::query_scalar("SELECT current_version FROM profiles WHERE id = $1 FOR UPDATE")
+            .bind(uuid::Uuid::parse_str(SHARED).unwrap())
+            .fetch_optional(&mut c)
+            .await
+            .expect("lock");
+        assert!(v.is_some(), "{user} could not lock the profile it may upload to");
+    }
+});
