@@ -2691,6 +2691,21 @@ async fn edit_proxy(
         return Err(ApiError::BadRequest("a proxy needs a host and a port".into()));
     }
 
+    // Someone without `reveal_secrets` is shown the host masked, and the form
+    // sends back what it showed. Written, it turned a renamed proxy into one
+    // that dials "***1a2b.provider.net". The mask of the stored host means
+    // "unchanged".
+    let stored_host: Option<String> =
+        sqlx::query_scalar("SELECT host FROM proxies WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL")
+            .bind(proxy_id)
+            .bind(caller.org_id)
+            .fetch_optional(db.as_mut())
+            .await?;
+    let host = match stored_host {
+        Some(stored) if req.host.trim() == mask_host(&stored) => stored,
+        _ => req.host.trim().to_string(),
+    };
+
     let credentials = match (&req.credentials_enc, &req.wrapped_dek) {
         (Some(c), Some(d)) => {
             let c = unhex("credentials_enc", c)?;
@@ -2719,7 +2734,7 @@ async fn edit_proxy(
             )
             .bind(req.name.trim())
             .bind(&req.kind)
-            .bind(req.host.trim())
+            .bind(&host)
             .bind(req.port)
             .bind(&c)
             .bind(&d)
@@ -2735,7 +2750,7 @@ async fn edit_proxy(
             )
             .bind(req.name.trim())
             .bind(&req.kind)
-            .bind(req.host.trim())
+            .bind(&host)
             .bind(req.port)
             .bind(proxy_id)
             .bind(caller.org_id)

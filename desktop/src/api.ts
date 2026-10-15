@@ -425,6 +425,9 @@ export interface LocalProxy {
   port: number;
   username: string | null;
   password: string | null;
+  /** A team proxy: its login and password are on the server, sealed, and
+   *  never sent here. Blank fields in the form keep them. */
+  sealed?: boolean;
   last_country: string | null;
   last_ip: string | null;
   /** The exit's zone from the last check; absent from a server-side proxy. */
@@ -1149,6 +1152,11 @@ export const api = {
   mirrorStop: (): Promise<unknown> => cmd("mirror_stop"),
   mirrorStatus: (): Promise<MirrorStatus> => cmd<MirrorStatus>("mirror_status"),
   mirrorTyping: (on: boolean): Promise<unknown> => cmd("mirror_typing", { on }),
+
+  /** Saved local proxies whose password the keychain will not open now
+   *  (they read back blank); `retry` asks the keychain again. */
+  vaultStatus: (retry = false): Promise<{ available: boolean; unreadable: string[] }> =>
+    cmd("vault_status", { retry }),
 
   // ---- warming ------------------------------------------------------------
 

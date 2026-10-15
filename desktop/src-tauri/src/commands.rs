@@ -2537,10 +2537,23 @@ pub async fn proxies(
                     "rotate_url": serde_json::Value::Null,
                     "checker_url": serde_json::Value::Null,
                     "shared_with_profiles": p.shared_with_profiles,
+                    // The login and password exist, on the server, sealed: the
+                    // form says "saved" instead of showing two empty fields
+                    // that read as lost (tester, 15.10.2026).
+                    "sealed": true,
                 })
             })
             .collect(),
     ))
+}
+
+/// This machine's saved proxies whose secrets the keychain will not open now,
+/// and asking it again. Local proxies only: a team's are sealed under the
+/// organisation key, not the keychain.
+#[tauri::command]
+pub async fn vault_status(retry: bool) -> R<serde_json::Value> {
+    let method = if retry { "vault.retry" } else { "vault.status" };
+    Ok(crate::agent::call(method, serde_json::json!({})).await?)
 }
 
 /// Save a proxy.
@@ -2574,7 +2587,7 @@ pub async fn save_proxy(
     })?;
 
     let field = |k: &str| proxy.get(k).and_then(|v| v.as_str()).map(str::to_string);
-    let credentials = fury_shared::api::ProxyCredentials {
+    let mut credentials = fury_shared::api::ProxyCredentials {
         username: field("username").filter(|v| !v.is_empty()),
         password: field("password").filter(|v| !v.is_empty()),
     };
@@ -2594,6 +2607,26 @@ pub async fn save_proxy(
     let touching_credentials = id.is_empty()
         || credentials.username.is_some()
         || credentials.password.is_some();
+    // One half typed on an edit: the two are sealed together, so the other
+    // half has to come from what is stored, or it is sealed as nothing. A new
+    // password used to erase the login this way. WireGuard keeps its whole
+    // config in the password and has no login to keep.
+    let one_half = credentials.username.is_some() != credentials.password.is_some();
+    if !id.is_empty() && one_half && field("kind").as_deref() != Some("wireguard") {
+        let (_, stored) = stored_proxy_credentials(&state, &org_key, &id).await.map_err(|e| {
+            if e.status == 403 {
+                ApiErr::coded(
+                    "err.proxyBothHalves",
+                    "Type both the login and the password: they are saved together, and this \
+                     account may not read the stored ones to keep the half left blank.",
+                )
+            } else {
+                e
+            }
+        })?;
+        credentials.username = credentials.username.or(stored.username);
+        credentials.password = credentials.password.or(stored.password);
+    }
     if touching_credentials {
         let (credentials_enc, wrapped_dek) = crypto::seal_proxy_credentials(&org_key, &credentials)
             .map_err(|e| ApiErr::local(format!("Could not seal the credentials: {e}")))?;
@@ -2627,6 +2660,32 @@ fn proxy_url(kind: &str, host: &str, port: i64, user: Option<String>, pass: Opti
     }
 }
 
+/// A team proxy as the server stores it (kind, host, port), with its login
+/// and password opened here. Needs `reveal_secrets` on the server, and is
+/// recorded there as a reveal.
+async fn stored_proxy_credentials(
+    state: &State<'_, AppState>,
+    org_key: &[u8; 32],
+    id: &str,
+) -> R<(serde_json::Value, fury_shared::api::ProxyCredentials)> {
+    let sealed: serde_json::Value = state
+        .call(reqwest::Method::GET, &format!("/v1/proxies/{id}/credentials"), Body::None, true)
+        .await?;
+    let hex = |k: &str| -> R<Vec<u8>> {
+        let v = sealed.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+        (0..v.len())
+            .step_by(2)
+            .map(|i| {
+                u8::from_str_radix(v.get(i..i + 2).unwrap_or(""), 16)
+                    .map_err(|_| ApiErr::local(format!("{k} is not hex")))
+            })
+            .collect()
+    };
+    let creds = crypto::open_proxy_credentials(org_key, &hex("credentials_enc")?, &hex("wrapped_dek")?)
+        .map_err(|e| ApiErr::local(format!("Could not open this proxy's credentials: {e}")))?;
+    Ok((sealed, creds))
+}
+
 /// The proxy as a URL the agent can dial. In local mode that is what the
 /// interface sent; on a team server the credentials are sealed, so they are
 /// fetched and opened here — the interface never sees a password.
@@ -2646,30 +2705,7 @@ async fn resolve_proxy_url(
                 )
             })?;
 
-            let sealed: serde_json::Value = state
-                .call(
-                    reqwest::Method::GET,
-                    &format!("/v1/proxies/{id}/credentials"),
-                    Body::None,
-                    true,
-                )
-                .await?;
-
-            let hex = |k: &str| -> R<Vec<u8>> {
-                let v = sealed.get(k).and_then(|v| v.as_str()).unwrap_or_default();
-                (0..v.len())
-                    .step_by(2)
-                    .map(|i| {
-                        u8::from_str_radix(v.get(i..i + 2).unwrap_or(""), 16)
-                            .map_err(|_| ApiErr::local(format!("{k} is not hex")))
-                    })
-                    .collect()
-            };
-            let creds =
-                crypto::open_proxy_credentials(&org_key, &hex("credentials_enc")?, &hex("wrapped_dek")?)
-                    .map_err(|e| {
-                        ApiErr::local(format!("Could not open this proxy's credentials: {e}"))
-                    })?;
+            let (sealed, creds) = stored_proxy_credentials(state, &org_key, &id).await?;
 
             let s = |k: &str| sealed.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
             let port = sealed.get("port").and_then(|v| v.as_i64()).unwrap_or(0);

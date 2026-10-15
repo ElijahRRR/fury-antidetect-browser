@@ -17,7 +17,7 @@ import { proxyUrl } from "../proxyUrl";
  *  three accounts, and the place to see that is here — the "used by" column is
  *  the one number that matters, since several accounts behind one address is
  *  the oldest farm signal there is. */
-export function Proxies({ profiles }: { profiles: Profile[] }) {
+export function Proxies({ profiles, local }: { profiles: Profile[]; local: boolean }) {
   const { t, say } = useI18n();
   const { ask, dialog } = useAsk();
   const [rows, setRows] = useState<LocalProxy[]>([]);
@@ -59,6 +59,12 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
     await load();
   };
 
+  /** Local proxies whose password the keychain will not open now. They read
+   *  back blank, and nothing used to say so: a tester re-typed every one after
+   *  an update (15.10.2026). */
+  const [unreadable, setUnreadable] = useState<string[]>([]);
+  const [stillLocked, setStillLocked] = useState(false);
+
   const load = useCallback(async () => {
     try {
       setRows(await api.proxies());
@@ -66,7 +72,10 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
     } catch (e) {
       setError(say(e));
     }
-  }, []);
+    if (local) {
+      void api.vaultStatus().then((v) => setUnreadable(v.unreadable), () => {});
+    }
+  }, [local]);
 
   useEffect(() => {
     void load();
@@ -97,6 +106,22 @@ export function Proxies({ profiles }: { profiles: Profile[] }) {
       </div>
 
       {error && <div className="notice warnBar">{error}</div>}
+      {unreadable.length > 0 && (
+        <div className="notice warnBar">
+          {t("px.vaultUnreadable", { n: unreadable.length, list: unreadable.join(", ") })}
+          {stillLocked && <> {t("px.vaultStillLocked")}</>}{" "}
+          <button
+            className="linky"
+            onClick={async () => {
+              const v = await api.vaultStatus(true).catch(() => null);
+              setStillLocked(v !== null && v.unreadable.length > 0);
+              await load();
+            }}
+          >
+            {t("px.vaultRetry")}
+          </button>
+        </div>
+      )}
 
       <div className="tableWrap">
         {rows.length === 0 ? (

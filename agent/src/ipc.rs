@@ -1204,6 +1204,20 @@ impl Agent {
                 }))
             }
 
+            // Saved proxies whose secrets read back blank, and asking the
+            // keychain again. See Vault::retry.
+            "vault.status" | "vault.retry" => {
+                let available = if method == "vault.retry" {
+                    // Off the runtime: the keychain may put up a dialog and
+                    // block until it is answered.
+                    let vault = std::sync::Arc::clone(self.store.vault_handle());
+                    tokio::task::spawn_blocking(move || vault.retry()).await?
+                } else {
+                    self.store.vault_available()
+                };
+                Ok(json!({ "available": available, "unreadable": self.store.unreadable_proxies().await? }))
+            }
+
             "proxies.upsert" => {
                 let proxy: Proxy = serde_json::from_value(params)?;
                 Ok(json!({ "id": self.store.upsert_proxy(&proxy).await? }))

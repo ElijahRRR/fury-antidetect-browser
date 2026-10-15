@@ -210,6 +210,7 @@ fn main() {
             commands::mirror_status,
             commands::mirror_typing,
             commands::warm_start,
+            commands::vault_status,
             commands::warm_status,
             commands::warm_stop,
             commands::warm_clear,

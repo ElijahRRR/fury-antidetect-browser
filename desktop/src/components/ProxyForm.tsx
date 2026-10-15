@@ -171,11 +171,16 @@ export function ProxyForm({
 
           {!wg && <div className="field">
             <label htmlFor="f-user">{t("px.credentials")}</label>
-            <div className="row">
-              <input id="f-user" value={user} placeholder={t("px.user")} autoComplete="off"
-                onChange={(e) => setUser(e.target.value)} />
-              <input value={pass} placeholder={t("px.password")} type="password" autoComplete="off"
-                onChange={(e) => setPass(e.target.value)} />
+            <div>
+              <div className="row">
+                <input id="f-user" value={user} placeholder={editing?.sealed ? t("px.savedUser") : t("px.user")} autoComplete="off"
+                  onChange={(e) => setUser(e.target.value)} />
+                <input value={pass} placeholder={editing?.sealed ? t("px.savedPassword") : t("px.password")} type="password" autoComplete="off"
+                  onChange={(e) => setPass(e.target.value)} />
+              </div>
+              {/* A team proxy's login and password never reach this form, and
+                  two empty fields read as "the update lost them". */}
+              {editing?.sealed && <p className="hint">{t("px.savedHint")}</p>}
             </div>
           </div>}
 

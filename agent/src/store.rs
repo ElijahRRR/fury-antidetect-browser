@@ -584,6 +584,35 @@ impl Store {
 
     pub async fn upsert_proxy(&self, p: &Proxy) -> anyhow::Result<String> {
         let id = if p.id.is_empty() { new_id() } else { p.id.clone() };
+        // A secret this machine cannot open right now was shown to the form as
+        // blank, and the form sends the blank back. Writing it would turn "the
+        // keychain refused once" into "the password is gone": a tester re-typed
+        // every proxy password after an update (15.10.2026). Kept as stored
+        // unless something new was typed in its place.
+        let stored: Option<(Option<String>, Option<String>)> = if p.id.is_empty() {
+            None
+        } else {
+            sqlx::query_as("SELECT password, rotate_url FROM proxies WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&self.pool)
+                .await?
+        };
+        let (old_password, old_rotate) = stored.unwrap_or((None, None));
+        let secret = |incoming: Option<&str>, old: Option<String>| -> Option<String> {
+            match (incoming.filter(|v| !v.is_empty()), old) {
+                (None, Some(old)) if !self.vault.opens(&old) => {
+                    tracing::warn!(proxy = %p.name, "kept a stored secret this machine cannot open; nothing new was typed");
+                    Some(old)
+                }
+                // Sealed on the way in. A value already stored as plaintext by
+                // an older build is rewritten sealed the first time its proxy
+                // is saved -- which is why there is no migration step to fail
+                // on someone's laptop.
+                _ => incoming.map(|v| self.vault.seal(v)),
+            }
+        };
+        let password = secret(p.password.as_deref(), old_password);
+        let rotate_url = secret(p.rotate_url.as_deref(), old_rotate);
         sqlx::query(
             "INSERT INTO proxies
                 (id, name, kind, host, port, username, password, rotate_url, checker_url, created_at)
@@ -600,11 +629,8 @@ impl Store {
         .bind(&p.host)
         .bind(p.port as i64)
         .bind(&p.username)
-        // Sealed on the way in. A value already stored as plaintext by an older
-        // build is rewritten sealed the first time its proxy is saved — which is
-        // why there is no migration step to fail on someone's laptop.
-        .bind(p.password.as_deref().map(|v| self.vault.seal(v)))
-        .bind(p.rotate_url.as_deref().map(|v| self.vault.seal(v)))
+        .bind(password)
+        .bind(rotate_url)
         .bind(&p.checker_url)
         .bind(now())
         .execute(&self.pool)
@@ -736,6 +762,22 @@ impl Store {
     /// Whether secrets are actually being sealed, for the interface to report.
     pub fn vault_available(&self) -> bool {
         self.vault.available()
+    }
+
+    /// Saved proxies whose password or rotation link this machine cannot open
+    /// now: they read back blank, and a launch through one sends no password.
+    /// Said on screen, with a way to ask the keychain again.
+    pub async fn unreadable_proxies(&self) -> anyhow::Result<Vec<String>> {
+        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT name, password, rotate_url FROM proxies WHERE deleted_at IS NULL ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, pw, rot)| [pw, rot].into_iter().flatten().any(|v| !self.vault.opens(v)))
+            .map(|(name, _, _)| name)
+            .collect())
     }
 
     pub async fn delete_proxy(&self, id: &str) -> anyhow::Result<()> {
@@ -1734,5 +1776,51 @@ mod tests {
             ..anon
         };
         assert_eq!(auth.url(), "socks5://bob:s3cr3t@h:1080");
+    }
+
+    /// The keychain refused (or the key is another machine's): the password
+    /// reads back blank, the form sends that blank back on save, and the
+    /// stored one must survive it (tester, 15.10.2026).
+    #[tokio::test]
+    async fn saving_a_proxy_whose_password_cannot_be_opened_keeps_it() {
+        let s = store().await;
+        let proxy = Proxy {
+            id: String::new(),
+            name: "de-1".into(),
+            kind: "socks5".into(),
+            host: "h".into(),
+            port: 1080,
+            username: Some("bob".into()),
+            password: Some("s3cr3t".into()),
+            last_country: None,
+            last_ip: None,
+            last_timezone: None,
+            last_location: None,
+            rotate_url: Some("https://api.example/rotate?key=k".into()),
+            checker_url: None,
+        };
+        let id = s.upsert_proxy(&proxy).await.unwrap();
+        assert!(s.unreadable_proxies().await.unwrap().is_empty());
+
+        for vault in [crate::vault::Vault::for_tests_without_key(), crate::vault::Vault::for_tests([9u8; 32])] {
+            let locked = Store { pool: s.pool.clone(), vault: std::sync::Arc::new(vault) };
+            let shown = locked.proxies().await.unwrap().remove(0);
+            assert_eq!(shown.password.as_deref(), Some(""), "it reads back blank");
+            assert_eq!(locked.unreadable_proxies().await.unwrap(), vec![shown.name.clone()]);
+            // What the form sends back: everything as shown, the blank as none.
+            locked
+                .upsert_proxy(&Proxy { id: id.clone(), name: "de-1 renamed".into(), password: None, rotate_url: Some(String::new()), ..shown })
+                .await
+                .unwrap();
+        }
+
+        let back = s.proxies().await.unwrap().remove(0);
+        assert_eq!(back.name, "de-1 renamed", "the rest of the edit was saved");
+        assert_eq!(back.password.as_deref(), Some("s3cr3t"));
+        assert_eq!(back.rotate_url.as_deref(), Some("https://api.example/rotate?key=k"));
+
+        // With the key at hand, clearing is still clearing.
+        s.upsert_proxy(&Proxy { password: None, ..back }).await.unwrap();
+        assert_eq!(s.proxies().await.unwrap()[0].password, None);
     }
 }

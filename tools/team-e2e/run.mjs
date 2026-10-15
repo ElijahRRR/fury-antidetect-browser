@@ -579,6 +579,19 @@ async function main() {
     await close(t, b8, "agent");
   }
 
+  console.log("\n== 9. A proxy saved back with the host as it was shown masked keeps its host");
+  {
+    // server/src/api.rs mask_host, for a host whose first label is short.
+    const host = "127.0.0.1";
+    const tag = crypto.createHash("sha256").update(host).digest("hex").slice(0, 4);
+    const masked = `***${tag}.0.0.1`;
+    const hostNow = async () => (await api("GET", `/v1/proxies/${t.proxyServerId}/credentials`, t.tokens.A)).host;
+    await api("PATCH", `/v1/proxies/${t.proxyServerId}`, t.tokens.A, { name: "e2e renamed", kind: "socks5", host: masked, port: 1080 });
+    claim((await hostNow()) === host, `the stored host survived a save of its mask (${masked})`);
+    await api("PATCH", `/v1/proxies/${t.proxyServerId}`, t.tokens.A, { name: "e2e renamed", kind: "socks5", host: "127.0.0.2", port: 1080 });
+    claim((await hostNow()) === "127.0.0.2", "a host actually typed is still saved");
+  }
+
   console.log(`\n${failed === 0 ? "PASS" : "FAIL"} -- ${passed} ok, ${failed} false`);
   process.exitCode = failed === 0 ? 0 : 1;
 }
