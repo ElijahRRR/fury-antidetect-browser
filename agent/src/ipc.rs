@@ -478,7 +478,18 @@ impl Agent {
         tracing::info!(agent = %endpoint, "agent listening");
 
         loop {
-            let stream = listener.accept().await?;
+            // Out of descriptors is waited out, not returned. Returning it
+            // ended the process, and with it every open profile's relay: a
+            // tester's agent restarted 39 times in a day this way, 18.10.2026.
+            let stream = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) if fury_platform::is_out_of_descriptors(&e) => {
+                    tracing::warn!(error = %e, "agent socket: out of file descriptors, waiting");
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let agent = Arc::clone(&self);
             tokio::spawn(async move {
                 if let Err(e) = agent.handle_connection(stream).await {

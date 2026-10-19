@@ -83,6 +83,11 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("serve") => {
+            // Before anything opens a socket. See fury_platform::fdlimit: 256
+            // from the Finder was the agent's ceiling, and it hit it.
+            if let Some((before, after)) = fury_platform::raise_fd_limit() {
+                tracing::info!(before, after, "open-file limit");
+            }
             let agent = ipc::Agent::new().await?;
 
             // Only when asked for. See http.rs: a loopback port is reachable

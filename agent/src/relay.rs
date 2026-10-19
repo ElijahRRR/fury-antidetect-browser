@@ -245,6 +245,11 @@ impl Relay {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!(error = %e, "accept failed");
+                        // Not straight back to accept: at EMFILE the pending
+                        // connection stays queued, the listener stays ready,
+                        // and the loop spins writing this line until a
+                        // descriptor frees up.
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         continue;
                     }
                 };

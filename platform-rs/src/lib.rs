@@ -42,6 +42,7 @@
 
 pub mod carrier;
 pub mod dirs;
+pub mod fdlimit;
 pub mod ipc;
 pub mod perms;
 pub mod process;
@@ -51,6 +52,7 @@ pub mod version;
 
 pub use carrier::Carrier;
 pub use dirs::{data_dir, ipc_endpoint, short_tag};
+pub use fdlimit::{is_out_of_descriptors, raise_fd_limit};
 pub use ipc::{Endpoint, Listener, Stream};
 pub use process::ask_to_close;
 pub use tree::copy_tree;
