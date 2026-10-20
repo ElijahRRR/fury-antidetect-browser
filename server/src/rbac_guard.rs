@@ -202,15 +202,26 @@ pub async fn may_change_proxy(
     let Some(created_by) = created_by else {
         return Ok(None);
     };
-    Ok(Some(if fury_shared::rbac::has_implicit_project_access(role) {
+    let implicit = fury_shared::rbac::has_implicit_project_access(role);
+    let mine = created_by == Some(user_id);
+    // Asked only when it decides something: it is a query.
+    let may_add = !implicit && mine && may_add_proxies(db, user_id, org_id, role).await?;
+    Ok(Some(proxy_change(implicit, mine, may_add)))
+}
+
+/// The rule `may_change_proxy` applies, without the database, so the proxy
+/// list can answer it for every row from one `may_add_proxies` and say so
+/// before anybody opens a form the server would refuse.
+pub fn proxy_change(implicit: bool, mine: bool, may_add: bool) -> ProxyChange {
+    if implicit {
         ProxyChange::Allowed
-    } else if created_by != Some(user_id) {
+    } else if !mine {
         ProxyChange::NotTheirs
-    } else if may_add_proxies(db, user_id, org_id, role).await? {
+    } else if may_add {
         ProxyChange::Allowed
     } else {
         ProxyChange::NoLongerPermitted
-    }))
+    }
 }
 
 fn parse_role(s: &str) -> Option<OrgRole> {

@@ -11,7 +11,7 @@ import { wgEndpoint } from "../proxyUrl";
  *  agent parses it the way `wg-quick` does and says what it refuses (a split
  *  tunnel, no DNS line) on Check. The endpoint is shown back so the paste
  *  visibly took. */
-export function WireGuardConf({ id, value, onChange }: { id?: string; value: string; onChange: (v: string) => void }) {
+export function WireGuardConf({ id, value, onChange, readOnly = false }: { id?: string; value: string; onChange: (v: string) => void; readOnly?: boolean }) {
   const { t } = useI18n();
   const endpoint = wgEndpoint(value);
   return (
@@ -19,7 +19,8 @@ export function WireGuardConf({ id, value, onChange }: { id?: string; value: str
       <textarea
         id={id}
         value={value}
-        autoFocus
+        readOnly={readOnly}
+        autoFocus={!readOnly}
         spellCheck={false}
         autoComplete="off"
         rows={9}

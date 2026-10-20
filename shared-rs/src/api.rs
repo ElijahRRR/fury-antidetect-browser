@@ -96,6 +96,16 @@ pub struct ProxySummary {
     /// How many other profiles share this exact proxy. Shown in the UI because
     /// several accounts behind one IP is a classic farm signal.
     pub shared_with_profiles: i64,
+    /// Who added it, by email. `None` when nobody is recorded: a proxy older
+    /// than the column, and older than the audit entry 0021 fills it from.
+    #[serde(default)]
+    pub added_by: Option<String>,
+    /// Whether the caller may change or delete it, by the server's own rule
+    /// (`rbac_guard::may_change_proxy`). The form used to find out only at
+    /// Save, after every field had been typed in again (tester, 20.10.2026).
+    /// `None` from a server before 0.4.7, which does not say.
+    #[serde(default)]
+    pub may_change: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

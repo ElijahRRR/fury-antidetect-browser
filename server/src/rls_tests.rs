@@ -843,6 +843,72 @@ db_test!(edit_proxy_on_a_project_adds_proxies_and_changes_only_ones_own, c, {
 });
 
 // ---------------------------------------------------------------------------
+// 0021: a proxy from before 0015 gets its author back from the audit log
+// ---------------------------------------------------------------------------
+
+db_test!(a_proxy_older_than_its_author_column_is_claimed_by_the_log, c, {
+    use crate::rbac_guard::{may_change_proxy, ProxyChange};
+    use fury_shared::rbac::OrgRole;
+    bind(&mut c, USER_A).await;
+    make_project(&mut c, PROJECT_A, ORG_A, USER_A).await;
+    // A member who added two proxies while they were admin, and one proxy
+    // nobody's log remembers. The tester was refused their own (20.10.2026).
+    let was_admin = "cccccccc-0000-0000-0000-00000000000e";
+    let sql = format!(
+        "INSERT INTO users (id, email, password_hash, public_key, wrapped_private_key, kdf_salt)
+           VALUES ('{was_admin}','m3@example.com','x','\\x00','\\x00','\\x00');
+         INSERT INTO org_members (org_id, user_id, role, wrapped_ork, ork_generation)
+           VALUES ('{ORG_A}','{was_admin}','member','\\x00',1);
+         INSERT INTO project_grants (project_id, user_id, permissions, granted_by)
+           VALUES ('{PROJECT_A}','{was_admin}',17,'{USER_A}');
+         INSERT INTO proxies (id, org_id, name, kind, host, port, created_by)
+           VALUES ('00000000-0000-0000-0000-0000000000f1','{ORG_A}','theirs','http','h1',1,NULL),
+                  ('00000000-0000-0000-0000-0000000000f2','{ORG_A}','owners','http','h2',2,NULL),
+                  ('00000000-0000-0000-0000-0000000000f3','{ORG_A}','unknown','http','h3',3,NULL);
+         INSERT INTO audit_events (org_id, actor_user_id, action, target_id)
+           VALUES ('{ORG_A}','{was_admin}','proxy.create','00000000-0000-0000-0000-0000000000f1'),
+                  ('{ORG_A}','{USER_A}','proxy.create','00000000-0000-0000-0000-0000000000f2'),
+                  ('{ORG_A}','{was_admin}','proxy.update','00000000-0000-0000-0000-0000000000f3');"
+    );
+    c.execute(sql.as_str()).await.expect("seed proxies without an author");
+
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let backfill = std::fs::read_to_string(dir.join("0021_proxy_author_from_audit.sql")).unwrap();
+    // As the migrator runs it: nobody bound, which under FORCE sees no rows.
+    sqlx::query("SELECT set_config('app.user_id', '', false)").execute(&mut c).await.unwrap();
+    c.execute(backfill.as_str()).await.expect("0021 again, over the seeded rows");
+    bind(&mut c, USER_A).await;
+
+    let org = uuid::Uuid::parse_str(ORG_A).unwrap();
+    let was_admin = uuid::Uuid::parse_str(was_admin).unwrap();
+    let id = |n: &str| uuid::Uuid::parse_str(&format!("00000000-0000-0000-0000-0000000000{n}")).unwrap();
+    macro_rules! change {
+        ($proxy:expr) => {
+            may_change_proxy(&mut c, was_admin, org, OrgRole::Member, id($proxy)).await.unwrap()
+        };
+    }
+    assert_eq!(change!("f1"), Some(ProxyChange::Allowed));
+    assert_eq!(change!("f2"), Some(ProxyChange::NotTheirs));
+    assert_eq!(change!("f3"), Some(ProxyChange::NotTheirs));
+
+    // The list names the author, so the form can say it before Save does.
+    let rows: Vec<crate::api::ProxyRow> = sqlx::query_as(&crate::api::list_proxies_sql())
+        .bind(org)
+        .fetch_all(&mut c)
+        .await
+        .expect("the list query runs");
+    let by: Vec<(String, Option<String>)> = rows.into_iter().map(|r| (r.1, r.10)).collect();
+    assert!(by.contains(&("theirs".into(), Some("m3@example.com".into()))));
+    assert!(by.contains(&("owners".into(), Some("a@example.com".into()))));
+    assert!(by.contains(&("unknown".into(), None)));
+
+    // FORCE is back on: unbound, the table is empty again.
+    sqlx::query("SELECT set_config('app.user_id', '', false)").execute(&mut c).await.unwrap();
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM proxies").fetch_one(&mut c).await.unwrap();
+    assert_eq!(seen, 0);
+});
+
+// ---------------------------------------------------------------------------
 // 0016: an organisation's own machines join its catalogue, and only its own
 // ---------------------------------------------------------------------------
 

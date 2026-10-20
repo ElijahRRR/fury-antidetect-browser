@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type LocalProxy, type Profile } from "../api";
 import { useI18n } from "../i18n";
 import { useAsk } from "./Ask";
-import { ProxyForm } from "./ProxyForm";
+import { ProxyForm, addedByMe, proxyLock } from "./ProxyForm";
 import { ProxyPaste } from "./ProxyPaste";
 import { proxyUrl } from "../proxyUrl";
 
@@ -17,7 +17,7 @@ import { proxyUrl } from "../proxyUrl";
  *  three accounts, and the place to see that is here — the "used by" column is
  *  the one number that matters, since several accounts behind one address is
  *  the oldest farm signal there is. */
-export function Proxies({ profiles, local }: { profiles: Profile[]; local: boolean }) {
+export function Proxies({ profiles, local, myEmail = null }: { profiles: Profile[]; local: boolean; myEmail?: string | null }) {
   const { t, say } = useI18n();
   const { ask, dialog } = useAsk();
   const [rows, setRows] = useState<LocalProxy[]>([]);
@@ -142,7 +142,10 @@ export function Proxies({ profiles, local }: { profiles: Profile[]; local: boole
                 <tr key={p.id}>
                   <td>
                     <div className="name">{p.name}</div>
-                    <div className="muted small">{p.kind}</div>
+                    <div className="muted small">
+                      {p.kind}
+                      {p.added_by && <> · {addedByMe(p, myEmail) ? t("px.addedByYou") : t("px.addedBy", { who: p.added_by })}</>}
+                    </div>
                   </td>
                   <td className="mono">
                     {p.host}:{p.port}
@@ -173,6 +176,8 @@ export function Proxies({ profiles, local }: { profiles: Profile[]; local: boole
                         icon="trash"
                         danger
                         label={t("row.delete")}
+                        title={proxyLock(p, myEmail, t) ?? undefined}
+                        disabled={proxyLock(p, myEmail, t) !== null}
                         onClick={async () => {
                           const go = await ask({
                             title: t("row.delete"),
@@ -181,7 +186,11 @@ export function Proxies({ profiles, local }: { profiles: Profile[]; local: boole
                             danger: true,
                           });
                           if (go === null) return;
-                          await api.deleteProxy(p.id);
+                          try {
+                            await api.deleteProxy(p.id);
+                          } catch (e) {
+                            setError(say(e));
+                          }
                           await load();
                         }}
                       />
@@ -197,6 +206,7 @@ export function Proxies({ profiles, local }: { profiles: Profile[]; local: boole
       {editing !== undefined && (
         <ProxyForm
           editing={editing}
+          myEmail={myEmail}
           onClose={() => setEditing(undefined)}
           onSaved={async () => {
             setEditing(undefined);

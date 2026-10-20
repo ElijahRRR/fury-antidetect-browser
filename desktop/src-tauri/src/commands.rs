@@ -2541,6 +2541,11 @@ pub async fn proxies(
                     // form says "saved" instead of showing two empty fields
                     // that read as lost (tester, 15.10.2026).
                     "sealed": true,
+                    // Who added it, and whether this account may change it:
+                    // the form says so on opening instead of refusing at Save
+                    // (tester, 20.10.2026). Null from an older server.
+                    "added_by": p.added_by,
+                    "may_change": p.may_change,
                 })
             })
             .collect(),

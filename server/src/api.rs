@@ -1288,6 +1288,8 @@ pub(crate) async fn profiles_in(
                         detected_kind: None,
                         last_checked_at: None,
                         shared_with_profiles: 0,
+                        added_by: None,
+                        may_change: None,
                     }),
                     lock: lock_user.map(|uid| LockInfo {
                         user_id: uid,
@@ -2289,6 +2291,27 @@ struct AuditEntry {
     at: String,
 }
 
+/// One row of `list_proxies_sql`.
+pub(crate) type ProxyRow = (
+    Uuid, String, String, String, i32, Option<String>, Option<String>, Option<String>, i64,
+    Option<Uuid>, Option<String>,
+);
+
+/// The organisation's proxies, with who added each, as SQL. A function so a
+/// test runs the real query against the real schema.
+pub(crate) fn list_proxies_sql() -> String {
+    format!(
+        "SELECT x.id, x.name, x.kind::text, x.host, x.port, x.last_country, \
+                x.last_kind_detected, {}, \
+                (SELECT count(*) FROM profiles f WHERE f.proxy_id = x.id AND f.deleted_at IS NULL), \
+                x.created_by, u.email \
+         FROM proxies x LEFT JOIN users u ON u.id = x.created_by \
+         WHERE x.org_id = $1 AND x.deleted_at IS NULL \
+         ORDER BY x.name",
+        rfc3339("x.last_checked_at"),
+    )
+}
+
 /// The organisation's proxies, for the picker on a profile.
 ///
 /// Never returns `credentials_enc`. Someone choosing which exit a profile uses
@@ -2303,18 +2326,20 @@ async fn list_proxies(
     let caller = db.caller;
 
     let reveal = caller.implicit_permissions().has(Perm::RevealSecrets);
-    let rows: Vec<(Uuid, String, String, String, i32, Option<String>, Option<String>, Option<String>, i64)> =
-        sqlx::query_as(&format!(
-            "SELECT x.id, x.name, x.kind::text, x.host, x.port, x.last_country,                     x.last_kind_detected, {},                     (SELECT count(*) FROM profiles f WHERE f.proxy_id = x.id AND f.deleted_at IS NULL)              FROM proxies x              WHERE x.org_id = $1 AND x.deleted_at IS NULL              ORDER BY x.name",
-            rfc3339("x.last_checked_at"),
-        ))
+    let rows: Vec<ProxyRow> = sqlx::query_as(&list_proxies_sql())
         .bind(caller.org_id)
         .fetch_all(db.as_mut())
         .await?;
 
+    // Who may change which, by the rule edit_proxy and delete_proxy enforce,
+    // so the list can say it instead of the Save button.
+    let implicit = fury_shared::rbac::has_implicit_project_access(caller.role);
+    let may_add = !implicit
+        && rbac_guard::may_add_proxies(db.as_mut(), caller.user_id, caller.org_id, caller.role).await?;
+
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, kind, host, port, country, detected, checked, used)| ProxySummary {
+            .map(|(id, name, kind, host, port, country, detected, checked, used, author, author_email)| ProxySummary {
                 id,
                 name,
                 kind,
@@ -2331,6 +2356,11 @@ async fn list_proxies(
                 detected_kind: detected,
                 last_checked_at: checked,
                 shared_with_profiles: used,
+                added_by: author_email,
+                may_change: Some(
+                    rbac_guard::proxy_change(implicit, author == Some(caller.user_id), may_add)
+                        == rbac_guard::ProxyChange::Allowed,
+                ),
             })
             .collect(),
     ))

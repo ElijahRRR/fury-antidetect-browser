@@ -428,6 +428,11 @@ export interface LocalProxy {
   /** A team proxy: its login and password are on the server, sealed, and
    *  never sent here. Blank fields in the form keep them. */
   sealed?: boolean;
+  /** A team proxy: who added it, by email; null when nobody is recorded. */
+  added_by?: string | null;
+  /** A team proxy: whether this account may change or delete it. `false` only
+   *  when the server said so; absent from an older server, which does not. */
+  may_change?: boolean | null;
   last_country: string | null;
   last_ip: string | null;
   /** The exit's zone from the last check; absent from a server-side proxy. */

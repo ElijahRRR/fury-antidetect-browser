@@ -3,6 +3,7 @@
 
 import { useRef, useState } from "react";
 import { api, type LocalProxy } from "../api";
+import { Icon } from "./Icon";
 import { NetworkReport } from "./NetworkReport";
 import { useI18n } from "../i18n";
 import { spreadPastedProxy } from "../proxyLine";
@@ -10,6 +11,25 @@ import { proxyUrl, wgEndpoint } from "../proxyUrl";
 import { WireGuardConf } from "./WireGuardConf";
 
 const KINDS = ["socks5", "http", "https", "wireguard"] as const;
+
+export const addedByMe = (p: LocalProxy, myEmail: string | null) =>
+  !!p.added_by && !!myEmail && p.added_by.toLowerCase() === myEmail.toLowerCase();
+
+/** Why this account may not change a team proxy, as a sentence, or null when
+ *  it may. The server's rule (`may_change_proxy`), as the list reports it, so
+ *  nobody types every field in again to learn it from the Save button
+ *  (tester, 20.10.2026). */
+export function proxyLock(
+  p: LocalProxy,
+  myEmail: string | null,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  if (p.may_change !== false) return null;
+  if (addedByMe(p, myEmail)) {
+    return t("px.lockedLostRight", { right: t("perm.edit_proxy") });
+  }
+  return p.added_by ? t("px.lockedBy", { who: p.added_by }) : t("px.lockedUnknown");
+}
 
 /** The proxy fields, as a dialog.
  *
@@ -20,14 +40,17 @@ const KINDS = ["socks5", "http", "https", "wireguard"] as const;
  *  wrong moment. */
 export function ProxyForm({
   editing,
+  myEmail = null,
   onClose,
   onSaved,
 }: {
   editing: LocalProxy | null;
+  myEmail?: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const { t, say } = useI18n();
+  const locked = editing ? proxyLock(editing, myEmail, t) : null;
   const [name, setName] = useState(editing?.name ?? "");
   const [kind, setKind] = useState(editing?.kind ?? "socks5");
   /** The type the pasted address answered on, while it is still the one set. */
@@ -80,15 +103,27 @@ export function ProxyForm({
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ height: "auto", maxHeight: "88vh" }} role="dialog" aria-modal="true">
         <div className="modalHead">
-          <h2>{editing ? t("px.edit") : t("px.new")}</h2>
+          <h2>{locked ? t("px.view") : editing ? t("px.edit") : t("px.new")}</h2>
         </div>
 
-        <div className="form" style={{ paddingTop: "var(--s-5)" }}>
+        {locked && (
+          <div className="modalNotice" role="status">
+            <Icon name="lock" size={16} />
+            <div>
+              <strong>{t("px.lockedTitle")}</strong>
+              <p>{locked}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Locked: the fields still show the proxy and the check still runs,
+            but nothing reads as editable that Save would only refuse. */}
+        <div className={locked ? "form locked" : "form"} style={{ paddingTop: "var(--s-5)" }}>
           <div className="field">
             <label>{t("px.type")}</label>
             <div className="segmented">
               {KINDS.map((k) => (
-                <button key={k} aria-pressed={kind === k}
+                <button key={k} aria-pressed={kind === k} disabled={locked !== null && kind !== k}
                   onClick={() => { setKind(k); kindTouched.current = true; setSniffed(null); }}>
                   {k}
                 </button>
@@ -100,10 +135,10 @@ export function ProxyForm({
           <div className="field">
             <label htmlFor={wg ? "f-conf" : "f-host"}>{wg ? t("px.wgConf") : t("px.address")}</label>
             <div>
-              {wg && <WireGuardConf id="f-conf" value={conf} onChange={setConf} />}
+              {wg && <WireGuardConf id="f-conf" value={conf} onChange={setConf} readOnly={locked !== null} />}
               <div className="row" style={wg ? { marginTop: "var(--s-2)" } : undefined}>
                 {!wg && <>
-                <input id="f-host" value={host} autoFocus placeholder="exit.provider.net"
+                <input id="f-host" value={host} autoFocus={!locked} readOnly={locked !== null} placeholder="exit.provider.net"
                   onChange={(e) => setHost(e.target.value)}
                   onPaste={spreadPastedProxy((p) => {
                     kindTouched.current = false;
@@ -118,7 +153,7 @@ export function ProxyForm({
                     setKind(k);
                     setSniffed(k);
                   })} />
-                <input style={{ width: 92 }} value={port} placeholder="1080" inputMode="numeric"
+                <input style={{ width: 92 }} value={port} readOnly={locked !== null} placeholder="1080" inputMode="numeric"
                   onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} />
                 </>}
                 <button style={{ whiteSpace: "nowrap" }} disabled={busy || !complete}
@@ -173,24 +208,24 @@ export function ProxyForm({
             <label htmlFor="f-user">{t("px.credentials")}</label>
             <div>
               <div className="row">
-                <input id="f-user" value={user} placeholder={editing?.sealed ? t("px.savedUser") : t("px.user")} autoComplete="off"
+                <input id="f-user" value={user} readOnly={locked !== null} placeholder={editing?.sealed ? t("px.savedUser") : t("px.user")} autoComplete="off"
                   onChange={(e) => setUser(e.target.value)} />
-                <input value={pass} placeholder={editing?.sealed ? t("px.savedPassword") : t("px.password")} type="password" autoComplete="off"
+                <input value={pass} readOnly={locked !== null} placeholder={editing?.sealed ? t("px.savedPassword") : t("px.password")} type="password" autoComplete="off"
                   onChange={(e) => setPass(e.target.value)} />
               </div>
               {/* A team proxy's login and password never reach this form, and
                   two empty fields read as "the update lost them". */}
-              {editing?.sealed && <p className="hint">{t("px.savedHint")}</p>}
+              {editing?.sealed && !locked && <p className="hint">{t("px.savedHint")}</p>}
             </div>
           </div>}
 
           <div className="field">
             <label htmlFor="f-name">{t("px.label")}</label>
             <div>
-              <input id="f-name" value={name}
+              <input id="f-name" value={name} readOnly={locked !== null}
                 placeholder={host ? `${host}:${port || "…"}` : "EU residential"}
                 onChange={(e) => setName(e.target.value)} />
-              <p className="hint">{t("px.labelHint")}</p>
+              {!locked && <p className="hint">{t("px.labelHint")}</p>}
             </div>
           </div>
 
@@ -198,20 +233,20 @@ export function ProxyForm({
           {!wg && <div className="field">
             <label htmlFor="f-rotate">{t("px.rotate")}</label>
             <div>
-              <input id="f-rotate" value={rotate} autoComplete="off"
-                placeholder="https://provider.example/rotate?key=…"
+              <input id="f-rotate" value={rotate} readOnly={locked !== null} autoComplete="off"
+                placeholder={locked ? "—" : "https://provider.example/rotate?key=…"}
                 onChange={(e) => setRotate(e.target.value)} />
-              <p className="hint">{t("px.rotateHint")}</p>
+              {!locked && <p className="hint">{t("px.rotateHint")}</p>}
             </div>
           </div>}
 
           <div className="field">
             <label htmlFor="f-checker">{t("px.checker")}</label>
             <div>
-              <input id="f-checker" value={checker} autoComplete="off"
+              <input id="f-checker" value={checker} readOnly={locked !== null} autoComplete="off"
                 placeholder={t("px.checkerDefault")}
                 onChange={(e) => setChecker(e.target.value)} />
-              <p className="hint">{t("px.checkerHint")}</p>
+              {!locked && <p className="hint">{t("px.checkerHint")}</p>}
             </div>
           </div>
         </div>
@@ -219,8 +254,8 @@ export function ProxyForm({
         <div className="modalFoot">
           {error && <span className="error">{error}</span>}
           <div className="spacer" />
-          <button className="ghost" onClick={onClose}>{t("ui.cancel")}</button>
-          <button className="primary" disabled={busy || !complete}
+          <button className={locked ? undefined : "ghost"} onClick={onClose}>{locked ? t("ui.close") : t("ui.cancel")}</button>
+          {!locked && <button className="primary" disabled={busy || !complete}
             onClick={async () => {
               setBusy(true);
               setError(null);
@@ -244,7 +279,7 @@ export function ProxyForm({
               }
             }}>
             {editing ? t("ui.save") : t("px.add")}
-          </button>
+          </button>}
         </div>
       </div>
     </div>

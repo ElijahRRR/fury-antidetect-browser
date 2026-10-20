@@ -1007,6 +1007,50 @@ input::placeholder {
   color: var(--text-faint);
 }
 
+/* Something a dialog has to say before anything is typed into it: "you may
+ * not change this". The page-wide bar sat flush against the dialog's edges and
+ * read as part of the frame; this one sits inside the margins the fields use. */
+.modalNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  margin: var(--s-4) var(--s-5) 0;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid rgba(224, 160, 48, 0.28);
+  border-radius: var(--r);
+  background: rgba(224, 160, 48, 0.07);
+  line-height: 1.5;
+}
+
+.modalNotice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.modalNotice strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+.modalNotice p {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .modalNotice {
+  border-color: rgba(138, 90, 6, 0.25);
+  background: rgba(138, 90, 6, 0.06);
+}
+
+.form.locked input,
+.form.locked textarea {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
 .modalFoot {
   display: flex;
   align-items: center;

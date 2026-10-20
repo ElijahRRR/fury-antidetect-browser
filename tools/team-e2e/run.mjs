@@ -592,6 +592,15 @@ async function main() {
     claim((await hostNow()) === "127.0.0.2", "a host actually typed is still saved");
   }
 
+  console.log("\n== 10. The proxy list says who added a proxy and whether this account may change it");
+  {
+    // The form used to learn it from a refused Save (tester, 20.10.2026).
+    const me = await api("GET", "/v1/me", t.tokens.A);
+    const listed = (await api("GET", "/v1/proxies", t.tokens.A)).find((p) => p.id === t.proxyServerId);
+    claim(listed?.added_by === me.email, `added_by names its author (${listed?.added_by})`);
+    claim(listed?.may_change === true, "its author, an owner, may change it");
+  }
+
   console.log(`\n${failed === 0 ? "PASS" : "FAIL"} -- ${passed} ok, ${failed} false`);
   process.exitCode = failed === 0 ? 0 : 1;
 }
