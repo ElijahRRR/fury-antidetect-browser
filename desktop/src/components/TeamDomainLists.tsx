@@ -45,7 +45,7 @@ export function TeamDomainLists({ canEdit }: { canEdit: boolean }) {
                 <td>
                   <div className="name">{l.name}</div>
                   <div className="muted small">
-                    {l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
+                    {l.local ? t("pd.listLocal", { n: l.domains }) : l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
                   </div>
                 </td>
                 <td className="actions">

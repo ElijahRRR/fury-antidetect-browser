@@ -347,7 +347,11 @@ impl Relay {
         // were answered above; everything else aimed at loopback, link-local or
         // RFC 1918 space fails HERE, on the same path as an unreachable
         // upstream, so an open port and a closed one are indistinguishable.
-        if !self.allow_local && is_local_target(&host) {
+        //
+        // Except what the profile's own lists put there in as many words: a
+        // `@local` entry (fury_shared::domains, "The local network").
+        let local = self.blocked.reached_locally(&host);
+        if !local && !self.allow_local && is_local_target(&host) {
             tracing::debug!(target = %host, "local address refused");
             let _ = client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
@@ -356,11 +360,13 @@ impl Relay {
         }
 
         // Kill-switch lives here: a failure to reach upstream produces an error
-        // response, never a direct connection.
-        let mut upstream = match self.dial(&host, port).await {
+        // response, never a direct connection. And a local host that cannot be
+        // reached locally is refused too, never handed to the proxy.
+        let dialled = if local { dial_local(&host, port).await } else { self.dial(&host, port).await };
+        let mut upstream = match dialled {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(target = %host, error = %e, "upstream failed — refusing, not falling back");
+                tracing::warn!(target = %host, local, error = %e, "upstream failed — refusing, not falling back");
                 let _ = client
                     .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                     .await;
@@ -557,6 +563,45 @@ async fn connect_upstream(host: &str, port: u16) -> Result<TcpStream, RelayError
                 CONNECT_TIMEOUT.as_secs()
             ),
         ))),
+    }
+}
+
+/// A host a `@local` list names, dialled from this machine.
+///
+/// Resolved by this machine's resolver, because that is the point: a tailnet
+/// name exists only in MagicDNS (100.100.100.100), and an office name only in
+/// the office DNS. Resolved ONCE and dialled at what came back, so a name
+/// cannot answer private for the check and public for the connection.
+///
+/// Every address must be private (`is_private_network`, which leaves out
+/// loopback and link-local). One public address among them and nothing is
+/// dialled: that is a public name, or a machine outside the network it lives
+/// in, and either way the connection would leave from the real address.
+async fn dial_local(host: &str, port: u16) -> Result<Conn, RelayError> {
+    let timed_out = || {
+        RelayError::UpstreamUnreachable(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{host}:{port} did not resolve and connect within {} s", CONNECT_TIMEOUT.as_secs()),
+        ))
+    };
+    let addrs: Vec<SocketAddr> = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(RelayError::UpstreamUnreachable)?
+        .collect();
+    if addrs.is_empty() || !addrs.iter().all(|a| fury_shared::domains::is_private_network(a.ip())) {
+        return Err(RelayError::ConnectRejected {
+            target: host.to_string(),
+            reason: format!(
+                "named in a @local list, but resolves to {addrs:?} here — not a private address, \
+                 so it is neither dialled from this machine nor sent to the proxy"
+            ),
+        });
+    }
+    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&addrs[..])).await {
+        Ok(Ok(s)) => Ok(Conn::Tcp(s)),
+        Ok(Err(e)) => Err(RelayError::UpstreamUnreachable(e)),
+        Err(_) => Err(timed_out()),
     }
 }
 
@@ -1547,6 +1592,99 @@ mod tests {
         task.abort();
     }
 
+
+    /// A CONNECT through a relay on `port`, and the first bytes of the answer.
+    async fn connect_through(port: u16, target: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let n = s.read(&mut buf).await.unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+
+    /// An upstream that counts the connections it is offered.
+    async fn counting_upstream() -> (Upstream, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(s);
+            }
+        });
+        (Upstream::Http { host: "127.0.0.1".into(), port, auth: None }, hits)
+    }
+
+    /// A `@local` name that resolves outside private space — here to
+    /// loopback, where the agent's own API lives — is refused, and the proxy
+    /// never hears of it either.
+    #[tokio::test]
+    async fn a_local_name_that_resolves_outside_private_space_goes_nowhere() {
+        let (upstream, hits) = counting_upstream().await;
+        let list = std::sync::Arc::new(crate::blocklist::Blocklist::parse("@local\nlocalhost.localdomain\nfoo.localhost\n"));
+        let relay = Relay::new(upstream).blocking(list);
+        let (port, task) = relay.serve(0).await.unwrap();
+
+        let answer = connect_through(port, "foo.localhost:443").await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "the name reached the proxy");
+
+        // The control: an ordinary host does go to the proxy.
+        let _ = connect_through(port, "example.com:443").await;
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    /// The whole feature, end to end: a private address of this machine,
+    /// named in a `@local` list, is dialled directly and the proxy is not
+    /// asked. Unlisted, the same address is refused as before.
+    ///
+    /// Needs this machine to have a private address on some interface, which
+    /// a laptop on any home or office network does. Without one there is
+    /// nothing to dial, and the test says so instead of passing quietly.
+    #[tokio::test]
+    async fn a_listed_private_address_is_dialled_from_this_machine() {
+        // The source address the OS would use toward a private network. No
+        // packet is sent: a UDP connect only picks the route.
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        let ip = match probe.connect("10.255.255.254:9").and_then(|_| probe.local_addr()) {
+            Ok(a) if fury_shared::domains::is_private_network(a.ip()) => a.ip(),
+            other => {
+                eprintln!("SKIPPED: no private address on this machine ({other:?})");
+                return;
+            }
+        };
+        let target = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+        let tport = target.local_addr().unwrap().port();
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = reached.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = target.accept().await {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::mem::forget(s);
+            }
+        });
+
+        let (upstream, hits) = counting_upstream().await;
+        let list = std::sync::Arc::new(crate::blocklist::Blocklist::parse(&format!("@local\n{ip}\n")));
+        let (port, task) = Relay::new(upstream.clone()).blocking(list).serve(0).await.unwrap();
+        let answer = connect_through(port, &format!("{ip}:{tport}")).await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "a local host went to the proxy");
+        task.abort();
+
+        let (port, task) = Relay::new(upstream).serve(0).await.unwrap();
+        let answer = connect_through(port, &format!("{ip}:{tport}")).await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "unlisted: {answer:?}");
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
+        task.abort();
+    }
 
     #[test]
     fn nothing_on_this_machine_or_its_network_is_a_target() {

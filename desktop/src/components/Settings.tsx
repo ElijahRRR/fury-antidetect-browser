@@ -584,7 +584,7 @@ function DomainLists() {
             <option value="">{t("set.listNew")}</option>
             {lists.map((l) => (
               <option key={l.name} value={l.name}>
-                {l.name} — {l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
+                {l.name} — {l.local ? t("pd.listLocal", { n: l.domains }) : l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
               </option>
             ))}
           </Select>
@@ -626,7 +626,7 @@ function DomainLists() {
                   setNote(
                     t("set.listSaved", {
                       n: saved.domains,
-                      mode: saved.allow_only ? t("set.listModeAllow") : "",
+                      mode: saved.local ? t("set.listModeLocal") : saved.allow_only ? t("set.listModeAllow") : "",
                     }),
                   );
                   setIsNew(false);

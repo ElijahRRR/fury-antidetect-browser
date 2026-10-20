@@ -1748,7 +1748,7 @@ async fn list_domain_lists(mut db: auth::Db) -> ApiResult<Json<serde_json::Value
         .map(|(id, name, body, updated_at)| {
             let parsed = fury_shared::domains::summarise(&body);
             json!({ "id": id, "name": name, "body": body, "updated_at": updated_at,
-                    "domains": parsed.0, "allow_only": parsed.1 })
+                    "domains": parsed.entries, "allow_only": parsed.allow_only, "local": parsed.local })
         })
         .collect::<Vec<_>>())))
 }
@@ -1762,7 +1762,7 @@ async fn upsert_domain_list(mut db: auth::Db, Json(req): Json<DomainListUpsert>)
     if name.is_empty() || name.len() > 64 {
         return Err(ApiError::BadRequest("a list needs a name of up to 64 characters".into()));
     }
-    let (domains, _) = fury_shared::domains::summarise(&req.body);
+    let domains = fury_shared::domains::summarise(&req.body).entries;
     if domains == 0 {
         return Err(ApiError::BadRequest("the list names no domains — check the format: a hosts file, an Adblock list, or one domain per line".into()));
     }

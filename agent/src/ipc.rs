@@ -825,6 +825,7 @@ impl Agent {
                             "name": name,
                             "domains": parsed.len(),
                             "allow_only": parsed.is_allow_only(),
+                            "local": parsed.is_local(),
                         }));
                     }
                 }
@@ -841,7 +842,7 @@ impl Agent {
                 // launch.
                 let parsed = crate::blocklist::Blocklist::parse(&text);
                 std::fs::write(&file, text)?;
-                Ok(json!({ "name": name, "domains": parsed.len(), "allow_only": parsed.is_allow_only() }))
+                Ok(json!({ "name": name, "domains": parsed.len(), "allow_only": parsed.is_allow_only(), "local": parsed.is_local() }))
             }
 
             // The text as written, for the editor. A list is a file the
@@ -2752,6 +2753,11 @@ impl Agent {
         // next one without anything having to notice it changed.
         let blocked = {
             let mut all = load_blocklists(&profile.blocklists);
+            // This machine's `@local` lists, whichever profile this is,
+            // personal or team: what is reachable on the local network is a
+            // fact about the machine, not about a profile. Only ever local
+            // entries, so nothing here can loosen what follows.
+            all.merge(load_local_lists());
             // The organisation's lists, by grant. Same parser, same merge rule
             // — a whitelist among them narrows, a blocklist subtracts — and
             // nothing the operator's own machine holds can loosen them.
@@ -3421,6 +3427,26 @@ fn load_blocklists(names: &[String]) -> crate::blocklist::Blocklist {
         if let Ok(path) = blocklist_path(name) {
             if let Ok(body) = std::fs::read_to_string(&path) {
                 all.merge(crate::blocklist::Blocklist::parse(&body));
+            }
+        }
+    }
+    all
+}
+
+/// Every `@local` list in this machine's list directory, unioned. Applied to
+/// every launch on this machine, so nobody has to tick one on each profile and
+/// a team profile, which has no lists of its own here, gets them too.
+fn load_local_lists() -> crate::blocklist::Blocklist {
+    let mut all = crate::blocklist::Blocklist::default();
+    let Ok(entries) = std::fs::read_dir(paths::blocklists_dir()) else { return all };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        if let Ok(body) = std::fs::read_to_string(&path) {
+            let list = crate::blocklist::Blocklist::parse(&body);
+            if list.is_local() {
+                all.merge(list);
             }
         }
     }

@@ -514,7 +514,11 @@ export function ProfileDialog({
                           <input
                             type="checkbox"
                             style={{ width: 14, height: 14, accentColor: "var(--accent)" }}
-                            checked={blocklists.includes(l.name)}
+                            // A @local list applies to every profile on
+                            // this machine (load_local_lists in the agent):
+                            // shown ticked, not offered as a choice.
+                            checked={l.local || blocklists.includes(l.name)}
+                            disabled={l.local}
                             onChange={(e) =>
                               setBlocklists((cur) =>
                                 e.target.checked ? [...cur, l.name] : cur.filter((n) => n !== l.name),
@@ -523,7 +527,7 @@ export function ProfileDialog({
                           />
                           {l.name}
                           <span className="muted small">
-                            {l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
+                            {l.local ? t("pd.listLocal", { n: l.domains }) : l.allow_only ? t("pd.listAllowOnly", { n: l.domains }) : t("pd.listBlocks", { n: l.domains })}
                           </span>
                         </label>
                       ))}

@@ -138,11 +138,13 @@ export interface Profile {
 }
 
 /** A named list of domains the relay refuses — or, with `@allow-only` on its
- *  first line, the only domains it permits. */
+ *  first line, the only domains it permits; or, with `@local`, hosts on this
+ *  machine's own network that every profile here reaches directly. */
 export interface DomainList {
   name: string;
   domains: number;
   allow_only: boolean;
+  local: boolean;
 }
 
 export interface LoginOutcome {
@@ -220,6 +222,7 @@ export interface OrgDomainList {
   updated_at: string;
   domains: number;
   allow_only: boolean;
+  local: boolean;
 }
 
 export interface MirrorStatus {
