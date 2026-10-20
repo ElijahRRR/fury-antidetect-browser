@@ -18,8 +18,12 @@ const KEY = "fury.theme";
  *  desktop when it changes at sunset, not stay wherever it happened to be when
  *  they chose. */
 export function useTheme(): [Theme, (t: Theme) => void] {
+  // Nothing stored means nobody chose, and until 0.4.4 that looked dark on
+  // every machine (the window was pinned dark, see below). Defaulting to
+  // "system" turned a light Windows desktop's app white on the next update, and
+  // a tester read it as the update losing his theme (20.10.2026).
   const [theme, setStored] = useState<Theme>(
-    () => (localStorage.getItem(KEY) as Theme) || "system",
+    () => (localStorage.getItem(KEY) as Theme) || "dark",
   );
 
   useEffect(() => {
