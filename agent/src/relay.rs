@@ -348,6 +348,10 @@ impl Relay {
         // RFC 1918 space fails HERE, on the same path as an unreachable
         // upstream, so an open port and a closed one are indistinguishable.
         //
+        // This catches what the browser asked for by address or by one of
+        // the names for this machine. A public name that resolves to a local
+        // address is caught where names are resolved: `dial`, Direct.
+        //
         // Except what the profile's own lists put there in as many words: a
         // `@local` entry (fury_shared::domains, "The local network").
         let local = self.blocked.reached_locally(&host);
@@ -421,8 +425,40 @@ impl Relay {
                 .await?;
                 Ok(Conn::Tcp(s))
             }
-            // No handshake: there is no proxy to greet.
-            Upstream::Direct => Ok(Conn::Tcp(connect_upstream(host, port).await?)),
+            // No handshake: there is no proxy to greet. But this is the one
+            // upstream that resolves names HERE, so it is where a name that
+            // resolves to this machine or its network has to be caught.
+            //
+            // Measured 20.10.2026 with the 155 core behind a direct relay:
+            // from https://example.com, `fetch("https://192-168-0-108.sslip.io:8443/")`
+            // opened a connection to 192.168.0.108 — a public DNS name that
+            // answers with a private address — while the same address as a
+            // literal was refused above. Resolved once, checked, and dialled
+            // at what was checked, so a name cannot answer public for the
+            // check and private for the connection.
+            //
+            // Not done for an HTTP or SOCKS5 upstream, even one listening on
+            // this machine (a VPN client's local SOCKS port), whose resolver
+            // may well be this machine's too. Asking here would send the name
+            // of every site the profile opens to the OS resolver, which is
+            // leak 4 at the top of this file, and the answer could differ
+            // from the one the proxy acts on anyway. That case stays open;
+            // `diagnose` at least flags such a proxy ("proxy_is_local").
+            Upstream::Direct => {
+                let addrs = resolve_here(host, port).await?;
+                if !self.allow_local {
+                    if let Some(a) = addrs.iter().find(|a| is_local_ip(a.ip())) {
+                        return Err(RelayError::ConnectRejected {
+                            target: host.to_string(),
+                            reason: format!(
+                                "resolves to {}, an address on this machine or its network",
+                                a.ip()
+                            ),
+                        });
+                    }
+                }
+                Ok(Conn::Tcp(connect_resolved(host, port, &addrs).await?))
+            }
             Upstream::WireGuard(stack, os) => {
                 // Resolved INSIDE the tunnel. Doing it out here would hand this
                 // machine's resolver the name of every site the profile is
@@ -578,18 +614,8 @@ async fn connect_upstream(host: &str, port: u16) -> Result<TcpStream, RelayError
 /// dialled: that is a public name, or a machine outside the network it lives
 /// in, and either way the connection would leave from the real address.
 async fn dial_local(host: &str, port: u16) -> Result<Conn, RelayError> {
-    let timed_out = || {
-        RelayError::UpstreamUnreachable(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("{host}:{port} did not resolve and connect within {} s", CONNECT_TIMEOUT.as_secs()),
-        ))
-    };
-    let addrs: Vec<SocketAddr> = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(RelayError::UpstreamUnreachable)?
-        .collect();
-    if addrs.is_empty() || !addrs.iter().all(|a| fury_shared::domains::is_private_network(a.ip())) {
+    let addrs = resolve_here(host, port).await?;
+    if !addrs.iter().all(|a| fury_shared::domains::is_private_network(a.ip())) {
         return Err(RelayError::ConnectRejected {
             target: host.to_string(),
             reason: format!(
@@ -598,11 +624,40 @@ async fn dial_local(host: &str, port: u16) -> Result<Conn, RelayError> {
             ),
         });
     }
-    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&addrs[..])).await {
-        Ok(Ok(s)) => Ok(Conn::Tcp(s)),
-        Ok(Err(e)) => Err(RelayError::UpstreamUnreachable(e)),
-        Err(_) => Err(timed_out()),
+    Ok(Conn::Tcp(connect_resolved(host, port, &addrs).await?))
+}
+
+/// This machine's resolver, within [`CONNECT_TIMEOUT`]. Only for the two
+/// paths that dial from here: no proxy, and `@local` hosts.
+async fn resolve_here(host: &str, port: u16) -> Result<Vec<SocketAddr>, RelayError> {
+    let addrs: Vec<SocketAddr> = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
+        .await
+        .map_err(|_| timed_out(host, port, "resolve"))?
+        .map_err(RelayError::UpstreamUnreachable)?
+        .collect();
+    if addrs.is_empty() {
+        return Err(RelayError::UpstreamUnreachable(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{host} resolved to no address"),
+        )));
     }
+    Ok(addrs)
+}
+
+/// Connect to addresses already resolved and checked — never the name again.
+async fn connect_resolved(host: &str, port: u16, addrs: &[SocketAddr]) -> Result<TcpStream, RelayError> {
+    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addrs)).await {
+        Ok(Ok(s)) => Ok(s),
+        Ok(Err(e)) => Err(RelayError::UpstreamUnreachable(e)),
+        Err(_) => Err(timed_out(host, port, "connect")),
+    }
+}
+
+fn timed_out(host: &str, port: u16, what: &str) -> RelayError {
+    RelayError::UpstreamUnreachable(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("{host}:{port} did not {what} within {} s", CONNECT_TIMEOUT.as_secs()),
+    ))
 }
 
 /// Run a proxy handshake within [`HANDSHAKE_TIMEOUT`], and read silence as an
@@ -1041,32 +1096,43 @@ impl Relay {
 }
 
 /// Loopback, link-local, RFC 1918 or a name for this machine — anything a
-/// page must not be able to reach through the profile. Names other than
-/// `localhost` are not resolved here (the relay never resolves; that is the
-/// upstream's job), so a LAN hostname passes — the upstream, if it is remote,
-/// cannot reach it anyway, and if it is local this is the residual gap.
+/// page must not be able to reach through the profile.
+///
+/// Decided on what the browser ASKED for, before anything is resolved: an
+/// address, or one of the names that always mean this machine. A name that
+/// merely resolves somewhere local is caught later, where it is resolved —
+/// `dial` for a profile without a proxy, the only upstream that resolves
+/// names on this machine. See the comment there for why the other upstreams
+/// are not asked.
 pub(crate) fn is_local_target(host: &str) -> bool {
     let h = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    let h = h.trim_end_matches('.');
     if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") {
         return true;
     }
-    if let Ok(v4) = h.parse::<std::net::Ipv4Addr>() {
-        let o = v4.octets();
-        return v4.is_loopback()
-            || v4.is_private()
-            || v4.is_link_local()
-            || v4.is_unspecified()
-            || (o[0] == 100 && (64..=127).contains(&o[1])); // carrier-grade NAT
+    h.parse::<std::net::IpAddr>().is_ok_and(is_local_ip)
+}
+
+/// The address half of `is_local_target`, for addresses a name resolved to.
+pub(crate) fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || (o[0] == 100 && (64..=127).contains(&o[1])) // carrier-grade NAT
+        }
+        std::net::IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (seg[0] & 0xfe00) == 0xfc00 // unique local
+                || (seg[0] & 0xffc0) == 0xfe80 // link-local
+                || v6.to_ipv4_mapped().is_some_and(|m| is_local_ip(m.into()))
+        }
     }
-    if let Ok(v6) = h.parse::<std::net::Ipv6Addr>() {
-        let seg = v6.segments();
-        return v6.is_loopback()
-            || v6.is_unspecified()
-            || (seg[0] & 0xfe00) == 0xfc00 // unique local
-            || (seg[0] & 0xffc0) == 0xfe80 // link-local
-            || v6.to_ipv4_mapped().is_some_and(|m| is_local_target(&m.to_string()));
-    }
-    false
 }
 
 /// Is this host one of the relay's own two names?
@@ -1441,8 +1507,99 @@ mod tests {
             std::future::pending::<()>().await;
         });
 
-        let relay = Relay::new(Upstream::Direct);
+        // A relay for a check may reach this machine (`reaching_local`); a
+        // profile's may not, which is the next test.
+        let relay = Relay::new(Upstream::Direct).reaching_local();
         assert!(relay.dial("127.0.0.1", port).await.map(|_| ()).is_ok());
+    }
+
+    /// A name that resolves to this machine, through a relay with no proxy.
+    ///
+    /// `127.1` is not an address to Rust, so `is_local_target` lets it pass as
+    /// a name — and the OS resolver reads it as 127.0.0.1 (inet_aton). The
+    /// same path a public name with a private answer takes (sslip.io, DNS
+    /// rebinding), without needing the network to test it.
+    #[tokio::test]
+    async fn with_no_proxy_a_name_that_resolves_here_is_refused() {
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = reached.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::mem::forget(s);
+            }
+        });
+        assert!(!is_local_target("127.1"), "the premise: the name rule does not see it");
+
+        let relay = Relay::new(Upstream::Direct);
+        match relay.dial("127.1", port).await.map(|_| ()) {
+            Err(RelayError::ConnectRejected { reason, .. }) => assert!(reason.contains("127.0.0.1"), "{reason}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        // Through the whole relay too: 502, and the listener never hears of it.
+        let (rport, task) = relay.serve(0).await.unwrap();
+        let answer = connect_through(rport, &format!("127.1:{port}")).await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer:?}");
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 0);
+        task.abort();
+    }
+
+    /// The case that was measured: a public DNS name whose answer is a
+    /// private address of this machine. Needs DNS and a private address; says
+    /// SKIPPED rather than passing quietly without them.
+    #[tokio::test]
+    async fn with_no_proxy_a_public_name_with_a_private_answer_is_refused() {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        let ip = match probe.connect("10.255.255.254:9").and_then(|_| probe.local_addr()) {
+            Ok(a) if fury_shared::domains::is_private_network(a.ip()) => a.ip(),
+            other => {
+                eprintln!("SKIPPED: no private address on this machine ({other:?})");
+                return;
+            }
+        };
+        let name = format!("{}.sslip.io", ip.to_string().replace('.', "-"));
+        if tokio::net::lookup_host((name.as_str(), 80)).await.map(|mut a| a.any(|a| a.ip() == ip)).unwrap_or(false) == false {
+            eprintln!("SKIPPED: {name} does not resolve to {ip} here");
+            return;
+        }
+        let target = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+        let tport = target.local_addr().unwrap().port();
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = reached.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = target.accept().await {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::mem::forget(s);
+            }
+        });
+
+        let (port, task) = Relay::new(Upstream::Direct).serve(0).await.unwrap();
+        let answer = connect_through(port, &format!("{name}:{tport}")).await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer:?}");
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 0, "{name} reached the LAN");
+        task.abort();
+
+        // The control: named in a @local list, the same name does open.
+        let list = std::sync::Arc::new(crate::blocklist::Blocklist::parse(&format!("@local\n{name}\n")));
+        let (port, task) = Relay::new(Upstream::Direct).blocking(list).serve(0).await.unwrap();
+        let answer = connect_through(port, &format!("{name}:{tport}")).await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
+        assert_eq!(settled(&reached, 1).await, 1);
+        task.abort();
+    }
+
+    /// And a public name with a public answer still dials, from the address
+    /// it resolved to. Needs DNS; skipped without it.
+    #[tokio::test]
+    async fn with_no_proxy_a_public_name_still_dials() {
+        if tokio::net::lookup_host(("example.com", 80)).await.is_err() {
+            eprintln!("SKIPPED: no DNS");
+            return;
+        }
+        let relay = Relay::new(Upstream::Direct);
+        assert!(relay.dial("example.com", 80).await.map(|_| ()).is_ok());
     }
 
     /// A real SOCKS5 refusal still reads as one. Without this the change above
@@ -1605,6 +1762,20 @@ mod tests {
         String::from_utf8_lossy(&buf[..n]).to_string()
     }
 
+    /// The listener's count, once its accept task has had the chance to run:
+    /// the relay answers 200 as soon as connect() returns, which can be before
+    /// the accepting side has counted anything.
+    async fn settled(counter: &std::sync::atomic::AtomicUsize, want: usize) -> usize {
+        for _ in 0..100 {
+            let n = counter.load(std::sync::atomic::Ordering::SeqCst);
+            if n >= want {
+                return n;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        counter.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// An upstream that counts the connections it is offered.
     async fn counting_upstream() -> (Upstream, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -1675,14 +1846,14 @@ mod tests {
         let (port, task) = Relay::new(upstream.clone()).blocking(list).serve(0).await.unwrap();
         let answer = connect_through(port, &format!("{ip}:{tport}")).await;
         assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
-        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(settled(&reached, 1).await, 1);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "a local host went to the proxy");
         task.abort();
 
         let (port, task) = Relay::new(upstream).serve(0).await.unwrap();
         let answer = connect_through(port, &format!("{ip}:{tport}")).await;
         assert!(answer.starts_with("HTTP/1.1 502"), "unlisted: {answer:?}");
-        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(settled(&reached, 1).await, 1);
         task.abort();
     }
 
@@ -1693,6 +1864,9 @@ mod tests {
             "10.0.0.5", "192.168.1.1", "172.16.0.1", "172.31.255.255", "169.254.169.254",
             "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1",
         ] {
+            assert!(is_local_target(h), "{h} should be refused");
+        }
+        for h in ["localhost.", "printer.local.", "[::1]"] {
             assert!(is_local_target(h), "{h} should be refused");
         }
         for h in ["example.com", "8.8.8.8", "172.32.0.1", "2001:db8::1", "fury.invalid", "11.0.0.1"] {
